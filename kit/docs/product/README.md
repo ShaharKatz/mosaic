@@ -23,6 +23,7 @@ features here regardless of topology; use an agreed milestone directory when app
 milestone is required to start a feature doc. Skeleton:
 
 - **Header block**: Status · Actors · Areas touched (repositories or components)
+- **Frontmatter `verified:`** — `"yes"` when current evidence supports the Status value, or `"no — see open question OQ-<n>"` naming the open question that holds the contradiction. Verification is distinct from status: shipped never implies checked live.
 - **Flow** — numbered steps across actors and areas
 - **Decisions inherited** — links to the D-numbers this flow builds on
 - **Feature-scoped decisions** — small-caliber choices that don't warrant a D-number

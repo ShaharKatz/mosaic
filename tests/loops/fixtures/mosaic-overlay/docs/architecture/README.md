@@ -4,7 +4,7 @@ This directory records the architecture and product decisions for **Fixture**, a
 
 ## Scope
 
-The link repo owns architecture truth; `member-a` owns the Python export implementation and tests.
+Project-wide architecture truth lives here; each owning repository or component keeps its own implementation docs and tests. This file indexes the element docs.
 
 ## How to read this (adapted from source §0)
 

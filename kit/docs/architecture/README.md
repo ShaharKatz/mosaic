@@ -4,7 +4,7 @@ Each element doc includes the context and rejected alternatives needed to apply 
 
 ## Scope
 
-Project-level architecture decisions live here; implementation and tests live in their owning repository or component.
+Project-wide architecture truth lives here; each owning repository or component keeps its own implementation docs and tests. This file indexes the element docs.
 
 ## How to read this
 

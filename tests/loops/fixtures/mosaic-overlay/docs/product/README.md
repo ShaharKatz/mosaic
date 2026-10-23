@@ -23,6 +23,7 @@ One doc per **cross-repo flow or feature**, numbered `F-NN` (greppable as `F-01`
 milestone directory that scoped it (create one when a milestone is agreed). Skeleton:
 
 - **Header block**: Status · Actors · Repos touched
+- **Frontmatter `verified:`** — `"yes"` when current evidence supports the Status value, or `"no — see open question OQ-<n>"` naming the open question that holds the contradiction. Verification is distinct from status: shipped never implies checked live.
 - **Flow** — numbered steps across actors/repos
 - **Decisions inherited** — links to the D-numbers this flow builds on
 - **Feature-scoped decisions** — small-caliber choices that don't warrant a D-number
