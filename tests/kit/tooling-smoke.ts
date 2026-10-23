@@ -72,6 +72,33 @@ try {
 	run([bun, "tools/doctor.ts"], 0);
 	console.log("PASS non-kit harness: unchanged single-port project entries need no twins, splits, or kit metadata");
 
+	put("docs/skill-references.md", "Read skill://missing-project-skill.\n");
+	ok(run([bun, "tools/doctor.ts"], 1).includes("FAIL references docs/skill-references.md: line 1: unresolved skill://missing-project-skill"));
+	console.log("PASS skill references: a skill missing from both homes fails references");
+
+	const claudeKitSkill = ".claude/skills/mosaic-plan/SKILL.md";
+	const kitSkill = readFileSync(join(target, claudeKitSkill), "utf8");
+	writeFileSync(join(scratch, "kit-skill.md"), kitSkill);
+	rmSync(join(target, claudeKitSkill));
+	symlinkSync(join(scratch, "kit-skill.md"), join(target, claudeKitSkill));
+	put("docs/skill-references.md", "Read skill://mosaic-plan.\n");
+	run([bun, "tools/doctor.ts"], 0);
+	rmSync(join(target, claudeKitSkill));
+	put(claudeKitSkill, kitSkill);
+	console.log("PASS skill references: kit skills resolve in .omp before the external Claude twin");
+
+	put("docs/skill-references.md", "Read skill://project-only.\n");
+	run([bun, "tools/doctor.ts"], 0);
+	rmSync(join(target, "docs/skill-references.md"));
+	console.log("PASS skill references: single-home project skills resolve in .claude");
+
+	mkdirSync(join(target, ".omp/skills/project-only/SKILL.md"), { recursive: true });
+	put("docs/skill-references.md", "Read skill://project-only.\n");
+	run([bun, "tools/doctor.ts"], 0);
+	rmSync(join(target, ".omp/skills/project-only"), { recursive: true });
+	rmSync(join(target, "docs/skill-references.md"));
+	console.log("PASS skill references: a directory at the omp skill file falls back to .claude");
+
 	const legacy = "# Legacy notes\n\nD9 was a local label. Review plan 0042 for OldContract.\n[Old source](missing.md) and rule://retired-history.\n";
 	put("docs/archived/docs/old/x.md", legacy);
 	put("docs/archived/docs/product/legacy.md", "# Old product without metadata\n\nOldContract cites plan 0042.\n");

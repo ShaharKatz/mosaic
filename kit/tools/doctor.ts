@@ -171,13 +171,23 @@ function reference(source: string, target: string, label: string, line: number, 
 		finding("FAIL", "references", source, `line ${line}: unresolved ${label} (${target})`);
 	}
 }
+// omp reads `skill://<name>` from `.omp/skills/` (kit skills) or `.claude/skills/` (single-home project skills).
+function skillTarget(name: string): string {
+	const kit = `.omp/skills/${name}/SKILL.md`;
+	try {
+		if (fs.statSync(path.resolve(root, kit)).isFile()) return kit;
+	} catch {
+		// A missing or inaccessible omp skill falls back to the Claude home.
+	}
+	return `.claude/skills/${name}/SKILL.md`;
+}
 const referenceFiles = new Set(["AGENTS.md", ...files("references", "docs"), ...harnessFiles.filter(file => file.startsWith(".omp/"))]);
 for (const file of referenceFiles) {
 	const content = text("references", file);
 	if (content === undefined) continue;
 	for (const [index, line] of lines(content).entries()) {
 		for (const match of line.matchAll(/\b(rule|skill):\/\/(\w[\w-]*)/g)) {
-			const target = match[1] === "rule" ? `.omp/rules/${match[2]}.md` : `.omp/skills/${match[2]}/SKILL.md`;
+			const target = match[1] === "rule" ? `.omp/rules/${match[2]}.md` : skillTarget(match[2]!);
 			reference(file, target, match[0], index + 1);
 		}
 	}
