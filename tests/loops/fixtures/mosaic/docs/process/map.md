@@ -26,7 +26,7 @@ Read [the documentation index](../index.md) for project documents and [the archi
 | Any status `→ abandoned` | Orchestrator or human; one-line reason | Archive in the home repo; mark and repoint ledger rows |
 ## Work selection
 Read `rule://plan-triage` to choose inline mechanical work, the light path, or a numbered plan.
-The light path is still a loop: in-memory plan → executor → commit → reviewer (base..head) → corrections → re-review → land.
+The light path is still a loop: in-memory plan → executor → commit → reviewer (base..head) → substantive (`S`) repairs → delta-round review → land.
 It omits the plan doc and formal planning approvals; read `rule://plan-triage` for recording and early exits.
 ## Read at the step
 | Need | Read |
