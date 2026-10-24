@@ -101,6 +101,62 @@ export-doc example, and `docs/process/plan-home.md`'s concrete member-plan examp
 their fixture content when changing a kit file they override. Its member also carries the
 conditional plan-0004 seed used by S9.
 
+### Editing the committed member fixture
+
+`member-a/` is committed as ordinary fixture files in both overlays and both generated
+fixtures, not as a submodule. Edit `fixtures/mosaic-overlay/member-a/` (and the baseline
+overlay for shared seed changes), then regenerate with `bun tests/loops/build-fixture.ts`.
+Never run fixture setup or create a virtual environment in those source directories.
+Setup initializes separate Git repositories only in disposable runner copies.
+
+The fixture and overlay `.gitignore` files deliberately retain `/member-a/`: the installed
+link repository must ignore its separate member repository. A root `.gitignore` negation
+cannot override that deeper ignore rule. When first adding reconstructed files, or adding
+new member files later, explicitly force-add the four member trees from the root of this
+source repository (the paths are listed in full, so no shell expansion is needed):
+
+```bash
+git add -f -- \
+  tests/loops/fixtures/mosaic-overlay/member-a \
+  tests/loops/fixtures/baseline-overlay/member-a \
+  tests/loops/fixtures/mosaic/member-a \
+  tests/loops/fixtures/baseline/member-a
+```
+
+Already tracked files remain tracked despite the ignore rule. Review new files explicitly;
+do not force-add `.venv/`, `.pytest_cache/`, or `__pycache__/`. This command is a maintainer
+instruction, not part of the builder or runner; fixture generation never stages changes.
+
+The reconstruction preserves the eleven-line CSV exporter (including its ignored `fmt`
+argument, first-row empty-input defect, and misleading docstring), the tracked skipped
+regression, and the deliberate README typo. Plan 0002's exact task/log passages are setup
+anchors for S16a; mosaic alone carries plan 0004, which setup removes except in S9 mode.
+These are scenario inputs, not defects to clean up during fixture maintenance.
+
+No original `member-a` blobs occur in `git log --all -- '**/member-a/**'`. These are
+reconstructed scenario seeds, not a byte-for-byte recovery. Both members contain:
+
+| Member-relative file | Reconstruction source |
+|---|---|
+| `.gitignore` | Setup's explicit staging list; inferred Python environment/cache exclusions. |
+| `CLAUDE.md` | Setup's staging list; inferred minimal pointers to the parent workflow and shared records. |
+| `README.md` | S4 typo contract; introductory sentence quoted verbatim by S7b's setup. |
+| `pyproject.toml` | Fixture contract requires pytest as a dev dependency; package version, Python floor and pytest range inferred. |
+| `uv.lock` | Regenerated with `uv lock --default-index https://pypi.org/simple`; dependency versions are newly resolved, not recovered. |
+| `pytest.ini` | Setup's staging list; inferred local import path and tests directory. |
+| `member_a/__init__.py` | Package named in the fixture contract and S12; empty marker inferred (no premature version helper). |
+| `member_a/api.py` | S17/S17b's exact replacement fragments, S14's line numbers, S20's eleven-line trap, and D1/D2. |
+| `tests/test_api.py` | Setup's split/skip anchors, S16c's Ada-row regression, and the one-pass/one-skip fixture contract. |
+| `docs/plans/README.md` | Member ledger required by S1/S13 and fixture setup; six-column schema follows the master ledger. |
+| `docs/plans/0002-empty-export-handling.md` | S16a's exact replacement passages, S16b/S16c's log anchors, and the pinned leftovers/review state below. Other prose and dates inferred. |
+
+Mosaic also contains `docs/plans/0004-empty-export-fix.md`, reconstructed from S9's
+prompt/check/rubric, the fixture's conditional setup, and `docs/ideation/round2-build-contract.md`.
+Its task/review prose and date are inferred; its two learning lines are exact checker inputs.
+The plans' approvals and execution records are synthetic scenario history, not reviews of
+this reconstruction. The two unallocated auth-plan-0004 citations in ordinary plan 0002 are
+intentional checkup human findings once setup removes the conditional S9 ledger row.
+
 Baseline's kit owns both ports (agents, skills, settings, and hooks), `AGENTS.md`, `CLAUDE.md`,
 `docs/workflow.md`, `docs/meta.md`, and `docs/plans/TEMPLATE.md`. Its overlay owns `member-a/`,
 `setup.sh`, `.gitignore`, the documentation index, populated gaps and ledgers, seeded plans,
