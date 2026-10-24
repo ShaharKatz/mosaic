@@ -25,6 +25,9 @@
 {{FRONTEND_REVIEW}}
 | `/frontend-review`, `frontend-reviewer` | Read-only frontend architecture, reuse, callers and contracts; human-first evidenced result | A pinned diff matches the specialist dispatch table |
 {{/FRONTEND_REVIEW}}
+{{REVIEW_ENGINE}}
+| `/review-with-codex` | Optional read-only snapshot review with [harness](../tools/codex-review-harness.ts) and strict [schema](../tools/codex-review-schema.json) | Human explicitly selects Codex; never the default engine |
+{{/REVIEW_ENGINE}}
 ## Process rules
 | Rule | Purpose | Read when |
 |---|---|---|

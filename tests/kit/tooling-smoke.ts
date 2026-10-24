@@ -1018,6 +1018,78 @@ async function exerciseStackAcceptance(input: Record<string, unknown>): Promise<
 		console.log(`PASS stack acceptance ${topology}/${mode}: none, complete, keyless and missing/unsafe declarations`);
 	}
 }
+async function exerciseReviewRunners(input: Record<string, unknown>): Promise<void> {
+	const runner = { format: "pytest", setup: [], argsPrefix: [], cwd: "." };
+	const doctor = new URL("../../kit/tools/doctor.ts", import.meta.url).pathname;
+	for (const topology of ["monorepo", "multi-repo"]) {
+		const member = { name: "example", path: "example", stack: "Example", testCommand: "true", coverageNote: "" };
+		const inactive = topology === "monorepo" ? "members" : "components";
+		writeFileSync(manifest, JSON.stringify({ ...input, topology,
+			remotes: { link: "https://example.invalid/link.git", members: { example: "https://example.invalid/member.git" } },
+			members: [{ ...member, ...(inactive === "members" ? { testRunner: runner } : {}) }],
+			components: [{ ...member, ...(inactive === "components" ? { testRunner: runner } : {}) }],
+		}));
+		await rejects(install({ manifest, target: join(scratch, `inactive-runner-${topology}`) }), new RegExp(`${inactive}\\[0\\]\\.testRunner`));
+	}
+	for (const mode of ["direct", "pull-request"]) {
+		const fresh = join(scratch, `review-runners-${mode}`);
+		const configuration = { ...input, tracking: { mode: "none" }, landing: mode === "direct"
+			? { mode } : { mode, host: "github" }, rootTest: { testCommand: "unavailable-project-command", testRunner: runner } };
+		writeFileSync(manifest, JSON.stringify(configuration));
+		await install({ manifest, target: fresh });
+		const metadataPath = join(fresh, ".omp/mosaic.json");
+		const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+		strictEqual(metadata.testing[0].repository, ".");
+		strictEqual(metadata.testing[0].testRunner.format, "pytest");
+		const skill = join(fresh, ".omp/skills/review-with-codex/SKILL.md");
+		const originalSkill = readFileSync(skill, "utf8");
+		strictEqual(originalSkill.includes("authenticated `gh`"), mode === "pull-request");
+		const check = (expected: number) => {
+			const result = Bun.spawnSync([bun, doctor, "--root", fresh], { stdout: "pipe", stderr: "pipe" });
+			strictEqual(result.exitCode, expected, `${result.stdout}\n${result.stderr}`);
+			if (expected === 0) strictEqual(result.stdout.toString(), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+		};
+		check(0);
+		for (const mutation of [
+			{ testCommand: "" }, { testRunner: { ...runner, format: "unknown" } },
+			{ testRunner: { ...runner, cwd: "../outside" } }, { testRunner: { ...runner, setup: [""] } },
+			{ testRunner: { ...runner, argsPrefix: ["\n"] } }, { testRunner: { ...runner, verifyCommand: "" } },
+		]) {
+			writeFileSync(metadataPath, JSON.stringify({ ...metadata, testing: [{ ...metadata.testing[0], ...mutation }] }));
+			check(1);
+		}
+		writeFileSync(metadataPath, JSON.stringify(metadata));
+		const schemaPath = join(fresh, "tools/codex-review-schema.json");
+		const schema = readFileSync(schemaPath);
+		rmSync(schemaPath); check(1); writeFileSync(schemaPath, schema);
+		for (const relative of ["tools/codex-review-harness.ts", "tools/constants/codex-review.ts"]) {
+			const required = join(fresh, relative), bytes = readFileSync(required);
+			rmSync(required); check(1); writeFileSync(required, bytes);
+		}
+		writeFileSync(skill, `${originalSkill}\n${"extra\n".repeat(121)}`); check(1);
+		writeFileSync(skill, `${originalSkill}\nChanged behavior.\n`); check(1); writeFileSync(skill, originalSkill);
+		// An inspected target cannot supply executable doctor helpers.
+		writeFileSync(join(fresh, "tools/constants/codex-review.ts"), 'throw new Error("TARGET CODE EXECUTED");\n');
+		check(0);
+		console.log(`PASS review runners ${mode}: normalized metadata, mode-gated context, doctor 0/0/0 without toolchains; invalid formats/commands/cwd/setup/prefix/schema/twin budgets/parity fail; target helper never executes`);
+	}
+	for (const rootTest of [
+		{ testCommand: "", testRunner: runner }, { testCommand: "true", testRunner: { ...runner, format: "unknown" } },
+		{ testCommand: "true", testRunner: { ...runner, cwd: "/outside" } },
+		{ testCommand: "true", testRunner: { ...runner, cwd: "a/../outside" } },
+		{ testCommand: "true", testRunner: { ...runner, setup: [""] } },
+	]) {
+		writeFileSync(manifest, JSON.stringify({ ...input, rootTest }));
+		await rejects(install({ manifest, target: join(scratch, "invalid-review-runner") }));
+	}
+	const legacy = join(scratch, "legacy-review-runners");
+	writeFileSync(manifest, JSON.stringify(input)); await install({ manifest, target: legacy });
+	ok(!("testing" in JSON.parse(readFileSync(join(legacy, ".omp/mosaic.json"), "utf8"))));
+	ok(!existsSync(join(legacy, ".omp/skills/review-with-codex")));
+	ok(!existsSync(join(legacy, "tools/codex-review-schema.json")));
+	console.log("PASS legacy manifests: no runner metadata, optional skills or schema; malformed new install fields refused");
+}
+
 try {
 	writeFileSync(manifest, JSON.stringify({
 		project: { name: "Monorepo", summary: "Monorepo contains an API and worker." },
@@ -1033,6 +1105,7 @@ try {
 	await exerciseStackAcceptance(input);
 	await exerciseSpecialistRepairs(input);
 	await exerciseSpecialists(input);
+	await exerciseReviewRunners(input);
 	await exerciseBraceScope(input);
 	await exerciseFinalReviewRegressions(input);
 	await exerciseStandards(input);

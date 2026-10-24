@@ -7,6 +7,11 @@ Read when: selecting a command for a {{MULTI_REPO}}member{{/MULTI_REPO}}{{MONORE
 |---|---|---|
 {{MEMBERS}}
 For targeted tests and allowed scope during execution and review, read [targeted-tests](targeted-tests.md) (loaded automatically inside executor and reviewer agents; the main session reads the file); for final verification and durable output, read `rule://verification`.
+{{REVIEW_ENGINE}}
+## Review-clone runners
+Runtime `.omp/mosaic.json` `testing` entries use these same commands with declared `testRunner` format, approved setup, argument prefix and repository-relative cwd. Read `skill://review-with-codex` only when that optional engine is selected; the default reviewer is unchanged.
+The harness forwards selected paths/report arguments only for pytest, Jest and Vitest; exit-code commands run unchanged and cannot attribute a mutation to a test. Missing rootTest means no root fallback. Member repositories each need their own pinned clone and repository selector.
+{{/REVIEW_ENGINE}}
 
 ## Local stack
 <!-- Project-owned: /mosaic-install confirms none from the survey, or replaces it with

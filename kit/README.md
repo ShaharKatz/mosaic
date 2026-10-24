@@ -110,6 +110,16 @@ Pull-request installations include a final review on the open PR, defaulting to 
 Git 2.40+ replay procedure to review only the branch's own code delta. Every PR, including
 docs-only and inline exemptions, still requires comment rulings and passing exact-head CI.
 Direct landing does not install this rule or its callers; no additional manifest field is needed.
+{{REVIEW_ENGINE}}
+### Optional Codex engine and test runners
+Codex remains opt-in; `gpt-reviewer` is the default. Add `testRunner` beside an existing member/component `testCommand` to install `/review-with-codex` twins and the shared harness/schema. No CLI installation, login or model choice is automatic.
+Each runner has `format: "pytest" | "jest" | "vitest" | "exit-code"`, approved `setup: string[]`, `argsPrefix: string[]`, repository-relative `cwd` (defaults to component path/member clone root), optional non-secret `env`, and optional `verifyCommand` for import/build provenance. Example: `"testRunner": { "format": "pytest", "setup": [], "argsPrefix": [], "cwd": "." }`.
+Declare entry runners only on the topology's active entries: `components` for monorepos, `members` for multi-repo installations. Runners on inactive entries are rejected rather than dropped.
+Direct commands use `argsPrefix: []`; wrappers such as a package-manager test script may need `["--"]`. Only known formats receive selected paths/report flags; only pytest accepts `::` node IDs. Exit-code commands run unchanged and yield no counts or attributable mutation failures. Setup is approved once at installation and runs automatically only in disposable review clones; undeclared setup needs approval.
+The `vitest` format requires Vitest 3+ and a `testCommand` without a `run` subcommand: the harness adds `run` and its reporters.
+Optional `rootTest: { testCommand, testRunner }` declares root tests; no entry means no root fallback. The installer normalizes selected entries into `.omp/mosaic.json` `testing`, not a separate runner registry or Markdown scraper. Old manifests without either field retain their installed Markdown, inventory and runtime metadata.
+Read the [maintenance contract](docs/kit/maintenance.md) and [survey constraints](../install/placeholders.md) before changing runner metadata. Invocation reports missing project toolchains; structural doctor checks do not require them or Codex.
+{{/REVIEW_ENGINE}}
 
 
 ### Path-selected review specialists

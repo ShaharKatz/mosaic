@@ -39,6 +39,7 @@ bun tests/kit/tooling-smoke.ts
 bun tests/kit/guard-smoke.ts
 bun tests/kit/diagram-smoke.ts
 bun tests/kit/stack-base-smoke.ts
+bun tests/kit/codex-review-smoke.ts
 bun tests/loops/run.ts --scenario S1-closeout-triage --harness mosaic \
   --model claude-opus-5-5 --thinking medium --dry-run
 bun tests/loops/scoreboard.ts

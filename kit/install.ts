@@ -6,8 +6,10 @@ import { parseArgs } from "node:util";
 import { BUNDLE_FILES, DIAGRAMS_ROOT, DRAWIO_PACKAGE, safeRoot, safeDiagramsRoot, diagramPathKey } from "./tools/constants/diagrams.ts";
 import { realpathWithinRoot } from "./tools/root-containment.ts";
 import { headingAnchors } from "./tools/specialists.ts";
+import { validateRunner, validateTesting } from "./tools/constants/codex-review.ts";
+import type { Runner, TestEntry } from "./tools/constants/codex-review.ts";
 
-type Member = { name: string; path: string; stack: string; testCommand: string; coverageNote: string };
+type Member = { name: string; path: string; stack: string; testCommand: string; coverageNote: string; testRunner?: Runner };
 type Tracking = { mode: "none" | "local" | "mcp"; mcp?: { server: string; team?: string; queue?: string } };
 type Landing = { mode: "direct"; host?: never; closeOut?: never } | { mode: "pull-request"; host: "github"; closeOut?: "two-commit" };
 type Standard = { name: "excluded-data" | "no-magic-strings" | "shared-first" | "testing" | "pr-evidence"; paths: string[]; dir?: string; designSystem?: string };
@@ -26,6 +28,7 @@ type Manifest = {
   components: Member[];
   standards?: Standard[];
   review?: Review;
+  rootTest?: { testCommand: string; testRunner: Runner };
 };
 type Entry = { kind: "directory"; mode: number } | { kind: "file"; mode: number; content: Buffer }
   | { kind: "symlink"; target: string };
@@ -109,6 +112,12 @@ function manifestFrom(value: unknown): Manifest {
       names.add(name);
       paths.add(entryPath.replace(/\/+$/, ""));
       if (label === "members" && topology === "multi-repo") line(remotes[name], `remotes.members.${name}`);
+      if (entry.testRunner !== undefined) {
+        if ((label === "members" && topology === "monorepo") || (label === "components" && topology === "multi-repo")) {
+          throw new Error(`${field}.testRunner is not used by topology ${topology}; configure the active entries instead`);
+        }
+        validateRunner(entry.testRunner, label === "members" ? "." : entryPath.replace(/\/+$/, ""));
+      }
     }
   }
   if (value.standards !== undefined) {
@@ -169,6 +178,11 @@ function manifestFrom(value: unknown): Manifest {
     }
     review = { specialists: specialists as Specialist[], ...(frontend !== undefined ? { frontend: frontend as Review["frontend"] } : {}) };
   }
+  if (value.rootTest !== undefined) {
+    if (!record(value.rootTest)) throw new Error("rootTest must be an object");
+    line(value.rootTest.testCommand, "rootTest.testCommand");
+    validateRunner(value.rootTest.testRunner, ".");
+  }
   return {
     project: value.project as Manifest["project"], topology, git: { defaultBranch }, tracking: tracking as Tracking,
     landing: landing as Landing, diagrams,
@@ -176,10 +190,35 @@ function manifestFrom(value: unknown): Manifest {
     members: value.members as Member[], components: components as Member[],
     ...(value.standards !== undefined ? { standards: value.standards as Standard[] } : {}),
     ...(review?.specialists.length ? { review } : {}),
+    ...(value.rootTest !== undefined ? { rootTest: value.rootTest as Manifest["rootTest"] } : {}),
   };
+}
+function testingFor(manifest: Manifest): TestEntry[] | undefined {
+  if (!manifest.rootTest && ![...manifest.members, ...manifest.components].some(entry => entry.testRunner)) return undefined;
+  return validateTesting([
+    ...(manifest.rootTest ? [{ repository: ".", path: ".", ...manifest.rootTest,
+      testRunner: validateRunner(manifest.rootTest.testRunner, ".") }] : []),
+    ...(manifest.topology === "multi-repo" ? manifest.members : manifest.components).map(entry => ({
+      repository: manifest.topology === "multi-repo" ? entry.path.replace(/\/+$/, "") : ".",
+      path: manifest.topology === "multi-repo" ? "." : entry.path.replace(/\/+$/, ""),
+      testCommand: entry.testCommand,
+      testRunner: entry.testRunner ? validateRunner(entry.testRunner, manifest.topology === "multi-repo" ? "." : entry.path.replace(/\/+$/, ""))
+        : { format: "exit-code", setup: [], argsPrefix: [], cwd: manifest.topology === "multi-repo" ? "." : entry.path.replace(/\/+$/, "") },
+    })),
+  ]);
+}
+function commandCwd(member: Member, manifest: Manifest): string {
+  if (!member.testRunner) return memberPath(member);
+  const cwd = validateRunner(member.testRunner, manifest.topology === "multi-repo" ? "." : member.path.replace(/\/+$/, "")).cwd;
+  return manifest.topology === "multi-repo" ? `${memberPath(member)}${cwd === "." ? "" : `${cwd}/`}` : cwd;
 }
 function memberPath(member: Member): string { return `${member.path.replace(/\/+$/, "")}/`; }
 function cell(value: string): string { return value.replace(/\|/g, "\\|"); }
+function rootTestRow(manifest: Manifest): string {
+  if (!manifest.rootTest) return "";
+  const cwd = validateRunner(manifest.rootTest.testRunner, ".").cwd;
+  return `| \`.\` | Project root | \`${cell(manifest.rootTest.testCommand)}\` from \`${cell(cwd)}\` |\n`;
+}
 function memberRemote(manifest: Manifest, token: string): string {
   const name = token.slice("MEMBER_REMOTE:".length);
   const remote = manifest.remotes.members[name];
@@ -190,7 +229,7 @@ function componentsFor(file: string, manifest: Manifest): string {
   const components = manifest.components;
   switch (file) {
     case "docs/process/stack.md":
-      return components.map(component => `| \`${cell(memberPath(component))}\` | ${cell(component.stack)} | \`${cell(component.testCommand)}\` from \`${cell(memberPath(component))}\`${component.coverageNote ? `; ${cell(component.coverageNote)}` : ""} |`).join("\n");
+      return rootTestRow(manifest) + components.map(component => `| \`${cell(memberPath(component))}\` | ${cell(component.stack)} | \`${cell(component.testCommand)}\` from \`${cell(commandCwd(component, manifest))}\`${component.coverageNote ? `; ${cell(component.coverageNote)}` : ""} |`).join("\n");
     case "docs/index.md":
       return components.map(component => `| \`${cell(memberPath(component))}\` | ${cell(component.stack)} |`).join("\n");
     case "docs/process/plan-home.md":
@@ -208,7 +247,7 @@ function membersFor(file: string, manifest: Manifest): string {
   const members = manifest.members;
   switch (file) {
     case "docs/process/stack.md":
-      return members.map(member => `| \`${member.name}\` | ${cell(member.stack)} | \`${cell(member.testCommand)}\` from \`${cell(memberPath(member))}\`${member.coverageNote ? `; ${cell(member.coverageNote)}` : ""} |`).join("\n");
+      return rootTestRow(manifest) + members.map(member => `| \`${member.name}\` | ${cell(member.stack)} | \`${cell(member.testCommand)}\` from \`${cell(commandCwd(member, manifest))}\`${member.coverageNote ? `; ${cell(member.coverageNote)}` : ""} |`).join("\n");
     case "docs/index.md":
       return members.map(member => `| \`${cell(memberPath(member))}\` | ${cell(member.stack)} |`).join("\n");
     case "docs/process/plan-home.md": {
@@ -230,7 +269,10 @@ function render(content: string, file: string, manifest: Manifest): string {
   const landingToken = manifest.landing.mode === "direct" ? "LANDING_DIRECT" : "LANDING_PULL_REQUEST";
   const closeOutToken = manifest.landing.closeOut === "two-commit" ? "CLOSE_OUT_TWO_COMMIT" : "CLOSE_OUT_DEFAULT";
   const evidenceSelected = manifest.standards?.some(entry => entry.name === "pr-evidence");
-  const selected = content.replace(/^\{\{(TRACKING_NONE|TRACKING_LOCAL|TRACKING_MCP)\}\}\n([\s\S]*?)^\{\{\/\1\}\}\n?/gm,
+  const selected = content.replace(/^\{\{REVIEW_ENGINE\}\}\n([\s\S]*?)^\{\{\/REVIEW_ENGINE\}\}\n?/gm,
+    (_match, body: string) => testingFor(manifest) ? body : "")
+    .replace(/\{\{REVIEW_ENGINE\}\}([\s\S]*?)\{\{\/REVIEW_ENGINE\}\}/g, (_match, body: string) => testingFor(manifest) ? body : "")
+    .replace(/^\{\{(TRACKING_NONE|TRACKING_LOCAL|TRACKING_MCP)\}\}\n([\s\S]*?)^\{\{\/\1\}\}\n?/gm,
     (_match, mode: string, body: string) => keep(mode) ? body : "")
     .replace(/\{\{(TRACKING_NONE|TRACKING_LOCAL|TRACKING_MCP)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
       (_match, mode: string, body: string) => keep(mode) ? body : "")
@@ -341,7 +383,7 @@ export async function install(options: { manifest: string; target: string; kit?:
   if (manifest.diagrams?.mode !== "drawio") {
     const excluded = [...BUNDLE_FILES, "docs/architecture/diagrams"];
     for (const name of entries.keys()) if (excluded.some(p => name === p || name.startsWith(p + "/"))
-      || name === ".omp/skills/diagrams" || name === ".claude/skills/diagrams" || name === "tools/constants") entries.delete(name);
+      || name === ".omp/skills/diagrams" || name === ".claude/skills/diagrams" || (name === "tools/constants" && !testingFor(manifest))) entries.delete(name);
   } else if (manifest.diagrams.root !== DIAGRAMS_ROOT) {
     for (const [name, entry] of [...entries]) if (name === DIAGRAMS_ROOT || name.startsWith(DIAGRAMS_ROOT + "/")) {
       const destination = manifest.diagrams.root! + name.slice(DIAGRAMS_ROOT.length);
@@ -377,6 +419,13 @@ export async function install(options: { manifest: string; target: string; kit?:
     for (const name of entries.keys()) {
       if (name === "tools/tracker.ts" || name === "docs/tracker" || name.startsWith("docs/tracker/")
         || name === ".omp/agents/tracker-scout.md" || name === ".claude/agents/tracker-scout.md") entries.delete(name);
+    }
+  }
+  if (!testingFor(manifest)) {
+    for (const name of entries.keys()) {
+      if (/^(?:\.omp|\.claude)\/skills\/review-with-codex(?:\/|$)/.test(name)
+        || name === "tools/codex-review-schema.json" || name === "tools/codex-review-harness.ts"
+        || name === "tools/constants/codex-review.ts" || (name === "tools/constants" && manifest.diagrams?.mode !== "drawio")) entries.delete(name);
     }
   }
   for (const name of entries.keys()) {
@@ -466,6 +515,7 @@ export async function install(options: { manifest: string; target: string; kit?:
     config.content = Buffer.from(`${JSON.stringify({
       defaultBranch: manifest.git.defaultBranch, topology: manifest.topology, tracking: manifest.tracking, landing: manifest.landing, kit: { commit },
       ...(specialists.length ? { review: manifest.review } : {}),
+      ...(testingFor(manifest) ? { testing: testingFor(manifest) } : {}),
       ...(manifest.standards?.length ? { standards: manifest.standards } : {}),
       ...(manifest.landing.mode === "pull-request" || manifest.standards?.length || specialists.length ? { repositories: [
         { name: "link-repo", path: ".", remote: manifest.remotes.link },

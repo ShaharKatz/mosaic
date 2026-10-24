@@ -100,6 +100,7 @@ let diagramsOn = false;
 let diagramsRoot = "";
 type Specialist = { agent: string; paths: string[]; context?: string };
 let specialists: Specialist[] = [];
+let reviewEngine = false;
 if (fs.existsSync(path.join(root, configPath))) {
 	const content = text("mosaic-config", configPath);
 	if (content !== undefined) {
@@ -243,6 +244,16 @@ if (fs.existsSync(path.join(root, configPath))) {
 				}
 				specialists = review.specialists;
 			}
+			if (config.testing !== undefined) {
+				reviewEngine = true;
+				// Load only our own optional helper, never code from the inspected --root.
+				const helper = new URL("./constants/codex-review.ts", import.meta.url);
+				const ownRoot = fs.realpathSync(path.dirname(import.meta.path));
+				const helperPath = fs.realpathSync(helper);
+				if (realpathWithinRoot(ownRoot, helperPath) === null) throw new Error("testing helper escapes doctor's directory");
+				const { validateTesting } = await import(helperPath);
+				validateTesting(config.testing);
+			}
 			defaultBranch = config.defaultBranch;
 			trackingMode = tracking.mode;
 		} catch (error) {
@@ -320,6 +331,7 @@ if (diagramsOn) processNames.push("diagrams");
 const skillNames = ["mosaic-plan", "mosaic-execute", "mosaic-gap-audit", "mosaic-intake", "mosaic-checkup", "mosaic-kit"];
 if (diagramsOn) skillNames.push("diagrams");
 if (specialists.some(entry => entry.agent === "frontend-reviewer")) skillNames.push("frontend-review");
+if (reviewEngine) skillNames.push("review-with-codex");
 const agentPairs = [
 	["executor", "executor"], ["plan-adversary", "plan-adversary"], ["registry-scout", "registry-scout"],
 	["context-scout", "context-scout"], ["claude-reviewer", "reviewer"], ["gpt-reviewer", "reviewer"],
@@ -350,6 +362,32 @@ if (fs.existsSync(path.join(root, ".omp/mosaic.json"))) harnessFiles.push(".omp/
 if (specialists.length) harnessFiles.push("tools/specialists.ts");
 for (const standard of standards) {
 	harnessFiles.push(`.omp/rules/${standard.name}.md`, `.claude/rules/${standard.name}.md`);
+}
+if (reviewEngine) {
+	for (const file of ["tools/codex-review-harness.ts", "tools/constants/codex-review.ts"]) {
+		try {
+			if (realpathWithinRoot(root, path.join(root, file)) === null || !fs.statSync(path.join(root, file)).isFile()) throw new Error("installed review tool is missing or outside root");
+			harnessFiles.push(file);
+		} catch (error) { finding("FAIL", "testing", file, String(error)); }
+	}
+	const schemaFile = "tools/codex-review-schema.json";
+	try {
+		if (realpathWithinRoot(root, path.join(root, schemaFile)) === null) throw new Error("schema outside installed root");
+		const schema = JSON.parse(fs.readFileSync(path.join(root, schemaFile), "utf8"));
+		const check = (node: unknown): void => {
+			if (!node || typeof node !== "object") return;
+			if (Array.isArray(node)) { for (const child of node) check(child); return; }
+			const object = node as Record<string, unknown>;
+			if (object.type === "object") {
+				const properties = object.properties as Record<string, unknown>;
+				if (!properties || object.additionalProperties !== false || !Array.isArray(object.required)
+					|| Object.keys(properties).sort().join("\0") !== [...object.required].sort().join("\0")) throw new Error("schema objects must be strict and require every property");
+			}
+			for (const child of Object.values(object)) check(child);
+		};
+		check(schema);
+		if (schema.type !== "object" || !schema.properties?.proposed_mutations) throw new Error("missing review/mutation schema");
+	} catch (error) { finding("FAIL", "testing", schemaFile, String(error)); }
 }
 
 // Budgets count physical body lines, including blanks, excluding the final newline.
