@@ -3,14 +3,16 @@
 // Exit 0: all hard checks pass; 1: failed checks; 2: a check cannot evaluate.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import { realpathWithinRoot } from "./root-containment.ts";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 type Outcome = "FAIL" | "WARN" | "CANNOT-EVALUATE";
 const counts = { FAIL: 0, WARN: 0, "CANNOT-EVALUATE": 0 };
 const reported = new Set<string>();
 const maintenanceChecks: Record<string, true> = {
 	budgets: true, "read-before-mutate": true, "mosaic-config": true, "guard-config": true,
-	"single-home": true, "port-parity": true, symlinks: true, "governed-guard": true, placeholders: true,
+	"single-home": true, "port-parity": true, symlinks: true, "governed-guard": true, placeholders: true, standards: true, specialists: true,
 };
 function finding(outcome: Outcome, check: string, file: string, detail: string): void {
 	if (maintenanceChecks[check]) detail = `/mosaic-kit: ${detail}`;
@@ -29,15 +31,19 @@ if (args.length !== 0 && (args.length !== 2 || args[0] !== "--root" || !args[1] 
 	finding("CANNOT-EVALUATE", "usage", ".", "usage: bun tools/doctor.ts [--root <dir>]");
 	finish();
 }
-const root = path.resolve(args[1] ?? process.cwd());
+let root = path.resolve(args[1] ?? process.cwd());
 try {
 	if (!fs.statSync(root).isDirectory()) throw new Error("not a directory");
+	root = fs.realpathSync(root);
 } catch (error) {
 	finding("CANNOT-EVALUATE", "root", root, String(error));
 	finish();
 }
 const texts = new Map<string, string>();
+const standardFiles = new Set<string>();
+const unsafeBundleFiles = new Set<string>();
 function text(check: string, file: string): string | undefined {
+	if (unsafeBundleFiles.has(file)) return undefined;
 	const cached = texts.get(file);
 	if (cached !== undefined) return cached;
 	try {
@@ -45,7 +51,9 @@ function text(check: string, file: string): string | undefined {
 		texts.set(file, content);
 		return content;
 	} catch (error) {
-		finding("CANNOT-EVALUATE", check, file, `cannot read: ${String(error)}`);
+		if (standardFiles.has(file) && (error as NodeJS.ErrnoException).code === "ENOENT") {
+			finding("FAIL", "standards", file, "installed standard file is missing");
+		} else finding("CANNOT-EVALUATE", check, file, `cannot read: ${String(error)}`);
 		return undefined;
 	}
 }
@@ -84,6 +92,15 @@ function lines(content: string): string[] {
 const configPath = ".omp/mosaic.json";
 let defaultBranch = "main";
 let trackingMode = "none";
+type Standard = { name: string; paths: string[]; dir?: string; designSystem?: string };
+let standards: Standard[] = [];
+let repositories: { name: string; path: string; remote: string }[] = [];
+let pullRequestMode = false;
+let diagramsOn = false;
+let diagramsRoot = "";
+type Specialist = { agent: string; paths: string[]; context?: string };
+let specialists: Specialist[] = [];
+let reviewEngine = false;
 if (fs.existsSync(path.join(root, configPath))) {
 	const content = text("mosaic-config", configPath);
 	if (content !== undefined) {
@@ -104,6 +121,173 @@ if (fs.existsSync(path.join(root, configPath))) {
 					}
 				}
 			} else if (tracking.mcp !== undefined) throw new Error("tracking.mcp is only valid in mcp mode");
+			const landing = config.landing === undefined ? { mode: "direct" } : config.landing;
+			if (!landing || (landing.mode !== "direct" && landing.mode !== "pull-request")) throw new Error("landing.mode must be direct or pull-request");
+			if (landing.mode === "pull-request") {
+				if (landing.host !== "github") throw new Error("landing.host must be github in pull-request mode");
+			} else if (landing.host !== undefined) throw new Error("landing.host is only valid in pull-request mode");
+			if (landing.closeOut !== undefined) {
+				if (landing.mode !== "pull-request") throw new Error("landing.closeOut is only valid in pull-request mode");
+				if (landing.closeOut !== "two-commit") throw new Error("landing.closeOut must be two-commit");
+			}
+			if (config.standards !== undefined) {
+				if (!Array.isArray(config.standards)) throw new Error("standards must be an array");
+				const names = new Set<string>();
+				for (const standard of config.standards) {
+					if (!standard || !["excluded-data", "no-magic-strings", "shared-first", "testing", "pr-evidence"].includes(standard.name)
+						|| names.has(standard.name)) throw new Error("standards must have supported, unique names");
+					names.add(standard.name);
+					if (standard.name === "pr-evidence" && (landing.mode !== "pull-request" || landing.host !== "github")) {
+						throw new Error("pr-evidence requires landing.mode: pull-request with landing.host: github");
+					}
+					if (!Array.isArray(standard.paths) || !standard.paths.length || standard.paths.some((glob: unknown) =>
+						typeof glob !== "string" || !glob.trim() || /[\r\n\0\\()]/.test(glob) || glob.includes("\u007b\u007b")
+						|| path.isAbsolute(glob) || glob.split("/").some(part => part === "." || part === ".."))) {
+						throw new Error("standards paths must be nonempty repository-relative globs without parentheses");
+					}
+					if (standard.dir !== undefined && (standard.name !== "excluded-data" || typeof standard.dir !== "string"
+						|| !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(standard.dir))) throw new Error("dir is only valid as an excluded-data repository-relative directory");
+					if (standard.designSystem !== undefined && (standard.name !== "shared-first" || typeof standard.designSystem !== "string"
+						|| !standard.designSystem.trim() || /[\r\n\0]/.test(standard.designSystem) || standard.designSystem.includes("\u007b\u007b"))) {
+						throw new Error("designSystem is only valid as a shared-first single-line string");
+					}
+				}
+				standards = config.standards;
+			}
+			const diagrams = config.diagrams;
+			if (diagrams !== undefined) {
+				if (!diagrams || !["none", "drawio"].includes(diagrams.mode)) throw new Error("diagrams.mode must be none or drawio");
+				if (diagrams.mode === "none" && (diagrams.root !== undefined || diagrams.components !== undefined || diagrams.erd !== undefined)) throw new Error("diagrams settings require drawio mode");
+				if (diagrams.mode === "drawio") {
+					// Execute only this doctor's contained sibling; inspected bundle contracts remain data.
+					const ownDirectory = path.dirname(fs.realpathSync(fileURLToPath(import.meta.url)));
+					let ownConstants: string;
+					try {
+						const candidate = fileURLToPath(new URL("./constants/diagrams.ts", import.meta.url));
+						const contained = realpathWithinRoot(ownDirectory, candidate);
+						if (!contained) throw new Error("unavailable");
+						const stat = fs.statSync(contained);
+						if (!stat.isFile() || !(stat.mode & 0o444)) throw new Error("unavailable");
+						fs.accessSync(contained, fs.constants.R_OK); ownConstants = contained;
+					} catch { throw new Error("diagrams bundle constants unavailable next to doctor"); }
+					const contract = await import(pathToFileURL(ownConstants).href);
+					if (!contract.safeDiagramsRoot(diagrams.root) || !Array.isArray(diagrams.components)
+						|| diagrams.components.some((component: unknown) => !contract.safeRoot(component))) throw new Error("invalid diagrams root or component bindings");
+					diagramsOn = true;
+					diagramsRoot = diagrams.root;
+					for (const directory of [diagrams.root, ...diagrams.components]) {
+						const candidate = path.join(root, directory);
+						// Components can be absent until the project checkout is populated; existing paths cannot escape.
+						if (fs.existsSync(candidate) && realpathWithinRoot(root, candidate) === null) throw new Error(`diagram path outside repository: ${directory}`);
+					}
+					for (const file of [...contract.BUNDLE_FILES, `${diagrams.root}/README.md`]) {
+						try {
+							const candidate = path.join(root, file), contained = realpathWithinRoot(root, candidate);
+							if (!contained) throw new Error("unavailable");
+							const stat = fs.statSync(contained);
+							if (!stat.isFile() || !(stat.mode & 0o444)) throw new Error("unavailable");
+							fs.accessSync(contained, fs.constants.R_OK);
+							if (file === "tools/constants/diagrams.ts" && !fs.readFileSync(contained).equals(fs.readFileSync(ownConstants))) throw new Error("differs from doctor's trusted sibling");
+						} catch {
+							unsafeBundleFiles.add(file);
+							finding("FAIL", "diagrams", file, "required bundle file missing, unreadable, outside repository, or differs from trusted constants");
+						}
+					}
+					if (diagrams.erd !== undefined) {
+						// Optional bundle is absent in core-only installs; static imports would break them.
+						let erdConstants: string;
+						try {
+							const candidate = fileURLToPath(new URL("./constants/erd.ts", import.meta.url));
+							const contained = realpathWithinRoot(ownDirectory, candidate);
+							if (!contained || !fs.statSync(contained).isFile() || !(fs.statSync(contained).mode & 0o444)) throw new Error("unavailable");
+							fs.accessSync(contained, fs.constants.R_OK); erdConstants = contained;
+						} catch { throw new Error("ERD adapter constants unavailable next to doctor"); }
+						const adapter = await import(pathToFileURL(erdConstants).href);
+						adapter.validateErd(diagrams.erd, diagrams.root, diagrams.components);
+						const output = diagrams.erd.output;
+						for (let candidate = path.join(root, output); candidate !== root; candidate = path.dirname(candidate)) {
+							// lstat, not existsSync: a dangling symlink must fail here as it does in the generator.
+							const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
+							if (stat && (!stat.isDirectory() || !realpathWithinRoot(root, candidate))) throw new Error(`unsafe ERD output ancestor: ${output}`);
+						}
+						const outputKey = contract.diagramPathKey(output);
+						for (const file of [...contract.BUNDLE_FILES, ...adapter.BUNDLE_FILES, `${diagrams.root}/README.md`]) {
+							const key = contract.diagramPathKey(file);
+							if (key === outputKey || key.startsWith(outputKey + "/") || outputKey.startsWith(key + "/")) throw new Error(`ERD output collides with kit file: ${file}`);
+						}
+						for (const file of adapter.BUNDLE_FILES) {
+							try {
+								const contained = realpathWithinRoot(root, path.join(root, file));
+								if (!contained || !fs.statSync(contained).isFile() || !(fs.statSync(contained).mode & 0o444)) throw new Error("unavailable");
+								fs.accessSync(contained, fs.constants.R_OK);
+								if (file === "tools/constants/erd.ts" && !fs.readFileSync(contained).equals(fs.readFileSync(erdConstants))) throw new Error("differs from trusted sibling");
+							} catch {
+								unsafeBundleFiles.add(file);
+								finding("FAIL", "diagrams", file, "required ERD adapter file missing, unreadable, outside repository, or differs from trusted constants");
+							}
+						}
+					}
+					try {
+						const mount = JSON.parse(fs.readFileSync(path.join(root, ".mcp.json"), "utf8")).mcpServers?.drawio;
+						if (mount?.command !== contract.DRAWIO_MOUNT.command || JSON.stringify(mount?.args) !== JSON.stringify(contract.DRAWIO_MOUNT.args)) throw new Error("missing or mismatched drawio entry");
+					} catch {
+						finding("FAIL", "diagrams", ".mcp.json", `declare drawio using ${contract.DRAWIO_PACKAGE}; configuration is not running-server proof`);
+					}
+				}
+			}
+			pullRequestMode = landing.mode === "pull-request";
+			if ((pullRequestMode || standards.length) && (!Array.isArray(config.repositories) || !config.repositories.length)) {
+				throw new Error(pullRequestMode ? "repositories must be a nonempty list in pull-request mode" : "repositories must be a nonempty list when standards are selected");
+			}
+			if (config.repositories !== undefined) {
+				if (!Array.isArray(config.repositories)) throw new Error("repositories must be an array");
+				const names = new Set<string>();
+				const paths = new Set<string>();
+				for (const repo of config.repositories) {
+					if (!repo || typeof repo.name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(repo.name) || names.has(repo.name)
+						|| typeof repo.path !== "string" || !repo.path || /[\r\n\0\\]/.test(repo.path) || path.isAbsolute(repo.path) || repo.path.split("/").includes("..") || paths.has(repo.path)
+						|| typeof repo.remote !== "string" || !repo.remote.trim() || /[\r\n\0]/.test(repo.remote)) throw new Error("invalid repositories metadata");
+					names.add(repo.name); paths.add(repo.path);
+				}
+				if (!config.repositories.length || config.repositories[0].name !== "link-repo" || config.repositories[0].path !== "."
+					|| (config.topology === "monorepo" && config.repositories.length !== 1)) throw new Error("repositories do not match topology");
+				repositories = config.repositories;
+			}
+			if (config.review !== undefined) {
+				const review = config.review;
+				if (!review || !Array.isArray(review.specialists)) throw new Error("review.specialists must be an array");
+				for (const entry of review.specialists) {
+					if (!entry || typeof entry.agent !== "string" || !/^[a-zA-Z0-9][\w-]*$/.test(entry.agent)) throw new Error("invalid specialist agent");
+					if (!Array.isArray(entry.paths) || !entry.paths.length || entry.paths.some((glob: unknown) =>
+						typeof glob !== "string" || !glob.trim() || /[\r\n\0\\()|`]/.test(glob) || glob.includes("\u007b\u007b")
+						|| path.isAbsolute(glob) || glob.split("/").some(part => !part || part === "." || part === ".."))) throw new Error("invalid specialist paths");
+					if (entry.context !== undefined) {
+						if (typeof entry.context !== "string" || !/^[^#]+#[\p{L}\p{N}_-]+$/u.test(entry.context)) throw new Error("invalid specialist context");
+						const [file] = entry.context.split("#");
+						if (path.isAbsolute(file) || /[\\|`\r\n\0]/.test(file) || file.split("/").some((part: string) => !part || part === "." || part === "..")) throw new Error("unsafe specialist context");
+					}
+				}
+				if (review.frontend !== undefined) {
+					const frontend = review.frontend;
+					if (!frontend || typeof frontend !== "object" || Array.isArray(frontend) || Object.keys(frontend).some(key => !["displayName", "collisions"].includes(key))
+						|| !review.specialists.some((entry: Specialist) => entry.agent === "frontend-reviewer")) throw new Error("frontend options require frontend-reviewer and only displayName/collisions");
+					if (frontend.displayName !== undefined && (typeof frontend.displayName !== "string" || !frontend.displayName.trim()
+						|| /[\r\n\0]/.test(frontend.displayName) || frontend.displayName.includes("\u007b\u007b"))) throw new Error("invalid frontend displayName");
+					if (frontend.collisions !== undefined && !["named", "codeowners-and-me"].includes(frontend.collisions)) throw new Error("invalid frontend collisions");
+					if (frontend.collisions === "codeowners-and-me" && (landing.mode !== "pull-request" || landing.host !== "github")) throw new Error("codeowners-and-me requires GitHub pull-request landing");
+				}
+				specialists = review.specialists;
+			}
+			if (config.testing !== undefined) {
+				reviewEngine = true;
+				// Load only our own optional helper, never code from the inspected --root.
+				const helper = new URL("./constants/codex-review.ts", import.meta.url);
+				const ownRoot = fs.realpathSync(path.dirname(import.meta.path));
+				const helperPath = fs.realpathSync(helper);
+				if (realpathWithinRoot(ownRoot, helperPath) === null) throw new Error("testing helper escapes doctor's directory");
+				const { validateTesting } = await import(helperPath);
+				validateTesting(config.testing);
+			}
 			defaultBranch = config.defaultBranch;
 			trackingMode = tracking.mode;
 		} catch (error) {
@@ -111,18 +295,88 @@ if (fs.existsSync(path.join(root, configPath))) {
 		}
 	}
 }
+if (specialists.length) {
+	let anchorsFor: ((markdown: string) => string[]) | undefined;
+	try {
+		const sibling = new URL("./specialists.ts", import.meta.url);
+		const real = fs.realpathSync(sibling);
+		if (path.dirname(real) !== fs.realpathSync(import.meta.dir) || !fs.statSync(real).isFile()) throw new Error("not a contained sibling file");
+		// Load only this doctor's optional sibling, never code from --root.
+		anchorsFor = (await import(real)).headingAnchors;
+		if (typeof anchorsFor !== "function") throw new Error("heading-anchor export missing");
+	} catch {
+		finding("FAIL", "specialists", "tools/specialists.ts", "specialists tool unavailable next to doctor");
+	}
+	for (const entry of specialists) {
+		for (const port of [".omp", ".claude"]) {
+			const file = `${port}/agents/${entry.agent}.md`;
+			try {
+				const real = realpathWithinRoot(root, path.resolve(root, file));
+				if (!real || !fs.statSync(real).isFile()) throw new Error("missing or escaping specialist agent");
+			} catch (error) { finding("FAIL", "specialists", file, String(error)); }
+		}
+		if (entry.context) {
+			try {
+				const [file, anchor] = entry.context.split("#");
+				const real = realpathWithinRoot(root, path.resolve(root, file!));
+				if (!real || !fs.statSync(real).isFile()) throw new Error("missing or escaping specialist context");
+				if (anchorsFor && !anchorsFor(fs.readFileSync(real, "utf8")).includes(anchor!)) throw new Error("missing specialist context section");
+			} catch (error) { finding("FAIL", "specialists", entry.context, String(error)); }
+		}
+	}
+}
+for (const standard of standards) {
+	standardFiles.add(`docs/standards/${standard.name}.md`);
+	for (const port of [".omp", ".claude"]) standardFiles.add(`${port}/rules/${standard.name}.md`);
+}
+if (standards.some(standard => standard.name === "pr-evidence") && typeof Bun.markdown?.render === "function") {
+	let effective: string | undefined;
+	for (const directory of [".github", "", "docs"]) {
+		const base = path.join(root, directory);
+		if (!fs.existsSync(base) || !fs.lstatSync(base).isDirectory()) continue;
+		const entry = fs.readdirSync(base, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))
+			.find(entry => !entry.isDirectory() && /^pull_request_template(?:\..+)?$/i.test(entry.name));
+		if (entry) { effective = path.join(directory, entry.name); break; }
+	}
+	let hasEvidence = false;
+	if (effective) {
+		const content = text("standards", effective);
+		if (content !== undefined) {
+			Bun.markdown.render(content, { heading: (children, { level }) => {
+				if (level === 2 && children.trim() === "Evidence") hasEvidence = true;
+				return "";
+			} });
+		}
+	}
+	if (!hasEvidence) finding("FAIL", "standards", effective ?? ".github/pull_request_template.md",
+		"pr-evidence requires a GitHub-honoured pull request template as the effective default containing an ## Evidence heading; merge the kit Evidence section into that project-owned default");
+}
 const processNames = [
 	"mosaic-core", "map", "plan-triage", "git-flow", "dispatch", "review-loop", "verification",
 	"records", "registries", "plan-home", "stack", "human-gates", "writing-for-the-reader",
-	"targeted-tests", "records-guard", "model-notes", "intake", "tracker",
+	"targeted-tests", "records-guard", "model-notes", "intake", "tracker", "stack-acceptance",
 ];
+if (pullRequestMode) processNames.push("final-review", "stacked-prs");
+for (const file of ["docs/process/stacked-prs.md", ".omp/rules/stacked-prs.md", "tools/stack-base.ts", "tools/constants/stack-base.ts"]) {
+	const present = fs.existsSync(path.join(root, file));
+	if (present !== pullRequestMode) finding(pullRequestMode ? "FAIL" : "WARN", "mosaic-config", file, pullRequestMode ? "required in pull-request mode" : "not installed by direct mode; preserve project-owned content");
+}
+if (diagramsOn) processNames.push("diagrams");
 const skillNames = ["mosaic-plan", "mosaic-execute", "mosaic-gap-audit", "mosaic-intake", "mosaic-checkup", "mosaic-kit"];
+if (diagramsOn) skillNames.push("diagrams");
+if (specialists.some(entry => entry.agent === "frontend-reviewer")) skillNames.push("frontend-review");
+if (reviewEngine) skillNames.push("review-with-codex");
 const agentPairs = [
 	["executor", "executor"], ["plan-adversary", "plan-adversary"], ["registry-scout", "registry-scout"],
 	["context-scout", "context-scout"], ["claude-reviewer", "reviewer"], ["gpt-reviewer", "reviewer"],
 	["tracker-scout", "tracker-scout"], ["librarian", "librarian"], ["ticket-investigator", "ticket-investigator"],
+	["stack-operator", "stack-operator"],
 ] as const;
-const installedAgentPairs = agentPairs.filter(([name]) => name !== "tracker-scout" || trackingMode === "local");
+const installedAgentPairs: readonly (readonly [string, string])[] = [
+	...agentPairs.filter(([name]) => name !== "tracker-scout" || trackingMode === "local"),
+	...(diagramsOn ? [["diagram-keeper", "diagram-keeper"] as const] : []),
+	...(specialists.some(entry => entry.agent === "frontend-reviewer") ? [["frontend-reviewer", "frontend-reviewer"] as const] : []),
+];
 // Structural contracts belong to the kit, not unrelated project harness entries.
 const processFiles = processNames.map(name => `docs/process/${name}.md`).sort();
 const ompRules = processNames.map(name => `.omp/rules/${name}.md`);
@@ -139,9 +393,40 @@ const harnessFiles = [
 	".claude/hooks/guard-main.sh", ".claude/hooks/lint-ledgers.sh", ".claude/hooks/records-guard.sh",
 ];
 if (fs.existsSync(path.join(root, ".omp/mosaic.json"))) harnessFiles.push(".omp/mosaic.json");
+if (specialists.length) harnessFiles.push("tools/specialists.ts");
+for (const standard of standards) {
+	harnessFiles.push(`.omp/rules/${standard.name}.md`, `.claude/rules/${standard.name}.md`);
+}
+if (reviewEngine) {
+	for (const file of ["tools/codex-review-harness.ts", "tools/constants/codex-review.ts"]) {
+		try {
+			if (realpathWithinRoot(root, path.join(root, file)) === null || !fs.statSync(path.join(root, file)).isFile()) throw new Error("installed review tool is missing or outside root");
+			harnessFiles.push(file);
+		} catch (error) { finding("FAIL", "testing", file, String(error)); }
+	}
+	const schemaFile = "tools/codex-review-schema.json";
+	try {
+		if (realpathWithinRoot(root, path.join(root, schemaFile)) === null) throw new Error("schema outside installed root");
+		const schema = JSON.parse(fs.readFileSync(path.join(root, schemaFile), "utf8"));
+		const check = (node: unknown): void => {
+			if (!node || typeof node !== "object") return;
+			if (Array.isArray(node)) { for (const child of node) check(child); return; }
+			const object = node as Record<string, unknown>;
+			if (object.type === "object") {
+				const properties = object.properties as Record<string, unknown>;
+				if (!properties || object.additionalProperties !== false || !Array.isArray(object.required)
+					|| Object.keys(properties).sort().join("\0") !== [...object.required].sort().join("\0")) throw new Error("schema objects must be strict and require every property");
+			}
+			for (const child of Object.values(object)) check(child);
+		};
+		check(schema);
+		if (schema.type !== "object" || !schema.properties?.proposed_mutations) throw new Error("missing review/mutation schema");
+	} catch (error) { finding("FAIL", "testing", schemaFile, String(error)); }
+}
 
 // Budgets count physical body lines, including blanks, excluding the final newline.
 const budgets = new Map<string, number>([["AGENTS.md", 30], ["CLAUDE.md", 30], [".claude/rules/mosaic-core.md", 30]]);
+if (specialists.length) budgets.set("tools/specialists.ts", 160);
 for (const file of processFiles) {
 	budgets.set(file, file.endsWith("/mosaic-core.md") ? 30 : file.endsWith("/intake.md") ? 40
 		: file.endsWith("/map.md") ? 60 : 80);
@@ -151,11 +436,71 @@ for (const port of [".omp", ".claude"] as const) {
 	for (const file of agentFiles(port)) budgets.set(file, 60);
 }
 budgets.set("docs/kit/maintenance.md", 120);
+for (const standard of standards) {
+	budgets.set(`docs/standards/${standard.name}.md`, 80);
+	for (const port of [".omp", ".claude"]) {
+		const file = `${port}/rules/${standard.name}.md`;
+		if (fs.existsSync(path.join(root, file))) budgets.set(file, 80);
+	}
+}
 for (const [file, max] of budgets) {
 	const content = text("budgets", file);
 	if (content === undefined) continue;
 	const count = lines(body(content)).length;
 	if (count > max) finding("FAIL", "budgets", file, `${count} body lines exceeds ${max}`);
+}
+
+// Inspect declarations only: never execute a project's commands or import its tools.
+const stackFile = "docs/process/stack.md";
+const stackText = text("stack-acceptance", stackFile);
+if (stackText !== undefined) {
+	let fence: { marker: string; length: number } | undefined;
+	const active = stackText.replace(/<!--[\s\S]*?(?:-->|$)/g, "").split("\n").map(line => {
+		const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+		if (fence) {
+			if (marker?.[1]?.[0] === fence.marker && marker[1].length >= fence.length && !marker[2]?.trim()) fence = undefined;
+			return "";
+		}
+		if (marker) {
+			fence = { marker: marker[1]![0]!, length: marker[1]!.length };
+			return "";
+		}
+		return line;
+	}).join("\n");
+	const content = active.match(/^## Local stack[ \t]*\n([\s\S]*)/m)?.[1]?.split(/^#{1,2} /m)[0]?.trim();
+	if (!content) finding("FAIL", "stack-acceptance", stackFile, "Local stack section must explicitly declare none or a complete procedure");
+	else if (!/^none(?: — \S.*)?$/.test(content)) {
+		const required = ["Bring-up", "Stop", "Teardown", "Drives", "Credentials", "Envelope", "Coverage check", "Pre-drive safety check"];
+		const values = new Map<string, string>();
+		// ASCII hyphens/underscores remain word characters for commands and variable names.
+		const placeholder = /^(?:none|n\/?a|not|no|unknown|pending|tbd|todo|skip)(?=$|[\s:;,.—])|^[-—?<]/i;
+		const declarations = content.split("\n").map(line => line
+			.replace(/^([-*] )(\*\*|__)([^:]+:)\2(?=\s|$)/, "$1$3")
+			.replace(/^([-*] )(\*\*|__)([^:]+)\2:/, "$1$3:"));
+		for (const label of required) {
+			// Labels match case-insensitively so a second spelling can't slip past the single-declaration rule.
+			const matches = declarations.filter(line => /^[-*] /.test(line)
+				&& line.slice(2).toLowerCase().startsWith(`${label.toLowerCase()}:`));
+			if (matches.length > 1) {
+				finding("FAIL", "stack-acceptance", stackFile, `${label} is declared ${matches.length} times; keep exactly one declaration`);
+				continue;
+			}
+			const value = matches[0]
+				?.slice(label.length + 3).trim().replace(/^([*_]+)(.*?)\1(?=[^*_]|$)/, "$2")
+				.replace(/^[*_]+/, "").replace(/^`([^`]+)`/, "$1").trim();
+			if (!value || placeholder.test(value) && !/^none needed — \S/.test(value)) {
+				finding("FAIL", "stack-acceptance", stackFile, `${label} requires a command/procedure or explicit none needed — reason`);
+			} else values.set(label, value);
+		}
+		for (const label of ["Bring-up", "Stop", "Teardown", "Drives", "Coverage check"]) {
+			if (values.get(label)?.startsWith("none needed")) finding("FAIL", "stack-acceptance", stackFile, `${label} requires a concrete procedure`);
+		}
+		const credentials = values.get("Credentials");
+		const envelope = values.get("Envelope");
+		if (envelope?.startsWith("none needed") && !credentials?.startsWith("none needed")) {
+			finding("FAIL", "stack-acceptance", stackFile, "Envelope is required when credentials or connection overrides are read");
+		}
+	}
 }
 
 // A missing reference target is a failure; an unreadable source cannot be evaluated.
@@ -171,31 +516,71 @@ function reference(source: string, target: string, label: string, line: number, 
 		finding("FAIL", "references", source, `line ${line}: unresolved ${label} (${target})`);
 	}
 }
+// omp reads `skill://<name>` from `.omp/skills/` (kit skills) or `.claude/skills/` (single-home project skills).
+function skillTarget(name: string): string {
+	const kit = `.omp/skills/${name}/SKILL.md`;
+	try {
+		if (fs.statSync(path.resolve(root, kit)).isFile()) return kit;
+	} catch {
+		// A missing or inaccessible omp skill falls back to the Claude home.
+	}
+	return `.claude/skills/${name}/SKILL.md`;
+}
 const referenceFiles = new Set(["AGENTS.md", ...files("references", "docs"), ...harnessFiles.filter(file => file.startsWith(".omp/"))]);
 for (const file of referenceFiles) {
 	const content = text("references", file);
 	if (content === undefined) continue;
 	for (const [index, line] of lines(content).entries()) {
 		for (const match of line.matchAll(/\b(rule|skill):\/\/(\w[\w-]*)/g)) {
-			const target = match[1] === "rule" ? `.omp/rules/${match[2]}.md` : `.omp/skills/${match[2]}/SKILL.md`;
+			const target = match[1] === "rule" ? `.omp/rules/${match[2]}.md` : skillTarget(match[2]!);
 			reference(file, target, match[0], index + 1);
 		}
 	}
 }
 // Markdown links belong to Markdown documents, not evidence logs, diagrams, or other assets.
-for (const file of ["AGENTS.md", "CLAUDE.md", ...files("references", "docs").filter(file => file.endsWith(".md"))]) {
+if (typeof Bun.markdown?.render !== "function") {
+	finding("CANNOT-EVALUATE", "references", ".", "Markdown-link checks require Bun.markdown.render");
+} else for (const file of ["AGENTS.md", "CLAUDE.md", ...files("references", "docs").filter(file => file.endsWith(".md"))]) {
 	const content = text("references", file);
 	if (content === undefined) continue;
+	// Line scanning retains candidate locations; the Markdown parser decides which are links.
+	// Only bare destinations of plain path characters are swapped for a sentinel: removing a pipe,
+	// quote, bracket, equals sign or backtick, or the `--`/`?` before an angle-bracket destination's
+	// `>` (a comment or processing-instruction end), could change the parse; others are always checked.
+	let prefix = "doctor-link";
+	while (content.includes(prefix)) prefix += "-";
+	const candidates: { line: number; destination: string; start: number; end: number; sentinel?: string }[] = [];
+	let offset = 0;
 	for (const [index, line] of lines(content).entries()) {
-		for (const match of line.matchAll(/!?\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+["'][^\n]*?["'])?\s*\)/g)) {
+		for (const match of line.matchAll(/!?\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+["'][^\n]*?["'])?\s*\)/gd)) {
 			const destination = match[1] ?? match[2]!;
 			if (/^(?:[a-z][\w+.-]*:|\/|#)/i.test(destination)) continue;
-			try {
-				const relative = decodeURIComponent(destination.split(/[?#]/, 1)[0]!);
-				if (relative) reference(file, path.join(path.dirname(file), relative), destination, index + 1, true);
-			} catch {
-				finding("FAIL", "references", file, `line ${index + 1}: invalid link ${destination}`);
-			}
+			const [start, end] = match.indices![match[1] === undefined ? 2 : 1]!;
+			const sentinel = match[1] === undefined && /^[\w./#?%+~-]+$/.test(destination) ? `${prefix}-${candidates.length}` : undefined;
+			candidates.push({ line: index + 1, destination, start: offset + start, end: offset + end, sentinel });
+		}
+		offset += line.length + 1;
+	}
+	let marked = content;
+	for (let index = candidates.length - 1; index >= 0; index--) {
+		const candidate = candidates[index]!;
+		if (candidate.sentinel) {
+			marked = marked.slice(0, candidate.start) + candidate.sentinel + marked.slice(candidate.end);
+		}
+	}
+	const links = new Set<string>();
+	Bun.markdown.render(marked, {
+		link: (_children, { href }) => { links.add(href); return ""; },
+		image: (_children, { src }) => { links.add(src); return ""; },
+	});
+	for (const candidate of candidates) {
+		const { destination, line, sentinel } = candidate;
+		if (sentinel && !links.has(sentinel)) continue;
+		try {
+			const relative = decodeURIComponent(destination.split(/[?#]/, 1)[0]!);
+			if (relative) reference(file, path.join(path.dirname(file), relative), destination, line, true);
+		} catch {
+			finding("FAIL", "references", file, `line ${line}: invalid link ${destination}`);
 		}
 	}
 }
@@ -249,6 +634,7 @@ const portIdioms: [RegExp, string][] = [
 	[/\birc DMs\b/g, "follow-up messages"],
 	[/`claude-reviewer` and `gpt-reviewer`/g, "`reviewer`"],
 	[/\bin parallel with identical inputs\b/g, "with these inputs"],
+	[/skill:\/\/frontend-review/g, ".claude/skills/frontend-review/SKILL.md"],
 ];
 function normalized(content: string): string[] {
 	let shared = body(content).trim();
@@ -329,13 +715,151 @@ if (guard !== undefined && guardTwin !== undefined && guardHook !== undefined) {
 	compareGlobs(expected, twinGlobs, ".claude/rules/records-guard.md");
 	compareGlobs(expected, hookGlobs, ".claude/hooks/records-guard.sh");
 }
+
+// Canonicalize existing ancestors while retaining the suffix of a not-yet-created data folder.
+function physicalPath(destination: string): string {
+	let ancestor = destination;
+	const suffix: string[] = [];
+	while (!fs.existsSync(ancestor)) {
+		suffix.unshift(path.basename(ancestor));
+		ancestor = path.dirname(ancestor);
+	}
+	return path.join(fs.realpathSync(ancestor), ...suffix);
+}
+// Resolve nested member repositories from the nearest existing directory, not the link repo's ignore policy.
+const repositoryRoots = new Map<string, string | undefined>();
+function repositoryFor(destination: string): string | undefined {
+	let ancestor = destination;
+	while (!fs.existsSync(ancestor) || !fs.statSync(ancestor).isDirectory()) {
+		const parent = path.dirname(ancestor);
+		if (parent === ancestor) return undefined;
+		ancestor = parent;
+	}
+	if (!repositoryRoots.has(ancestor)) {
+		const git = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: ancestor, encoding: "utf8" });
+		repositoryRoots.set(ancestor, git.status === 0 ? fs.realpathSync(git.stdout.trim()) : undefined);
+	}
+	return repositoryRoots.get(ancestor);
+}
+const repositoryFiles = new Map<string, string[]>();
+function inventory(repo: string, prefix: string): string[] {
+	const cached = repositoryFiles.get(prefix);
+	if (cached) return cached;
+	const git = spawnSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { cwd: repo, encoding: "utf8" });
+	if (git.status !== 0) throw new Error(`git ls-files failed: ${String(git.stderr ?? "").trim() || String(git.error)}`);
+	const result = git.stdout.split("\0").filter(Boolean).map(file => path.join(prefix, file))
+		.filter(file => file !== ".." && !file.startsWith(`..${path.sep}`) && !path.isAbsolute(file)
+			&& fs.existsSync(path.join(root, file)) && !fs.statSync(path.join(root, file)).isDirectory());
+	repositoryFiles.set(prefix, result);
+	return result;
+}
+const rootRepository = standards.length || specialists.length ? repositoryFor(root) : undefined;
+const inventoryRepositories = new Map<string, string>(rootRepository ? [["", root]] : []);
+const unavailableRepositories = new Set<string>();
+if (standards.length || specialists.length) for (const member of repositories.filter(repo => repo.path !== ".")) {
+	const destination = physicalPath(path.resolve(root, member.path));
+	const repo = repositoryFor(destination);
+	if (repo !== destination) {
+		finding("CANNOT-EVALUATE", "standards", member.path, `cannot evaluate member ${member.name}: no git repository at configured path`);
+		unavailableRepositories.add(member.path);
+	} else inventoryRepositories.set(member.path, repo);
+}
+for (const [prefix, repo] of inventoryRepositories) {
+	try { inventory(repo, prefix); }
+	catch (error) {
+		unavailableRepositories.add(prefix || ".");
+		finding("CANNOT-EVALUATE", "standards", prefix || ".", `cannot inventory repository: ${String(error)}`);
+	}
+}
+
+for (const standard of standards) {
+	const canonical = `docs/standards/${standard.name}.md`;
+	for (const file of [canonical, `.omp/rules/${standard.name}.md`, `.claude/rules/${standard.name}.md`]) {
+		if (!fs.existsSync(path.join(root, file))) {
+			finding("FAIL", "standards", file, "installed standard file is missing");
+			continue;
+		}
+		const content = text("standards", file);
+		if (content === undefined || file === canonical) continue;
+		if (!body(content).includes(`Canonical rule: \`${canonical}\``)) finding("FAIL", "standards", file, `must point at ${canonical}`);
+		try {
+			const header = frontmatter(content);
+			let actual: string[];
+			if (file.startsWith(".omp/")) {
+				const scope = /^scope:[ \t]*(.*)$/m.exec(header)?.[1];
+				if (scope === undefined) throw new Error("scope field is required");
+				const parsed: unknown = JSON.parse(scope);
+				if (!Array.isArray(parsed) || parsed.some(token => typeof token !== "string")) throw new Error("scope must be a string sequence");
+				actual = parsed;
+			} else {
+				const paths = /^paths:[ \t]*(\[[^\n]*\]|(?:\n[ \t]+-[^\n]*)*)[ \t]*$/m.exec(header)?.[1];
+				if (paths === undefined) throw new Error("paths field is required");
+				actual = paths.startsWith("[") ? JSON.parse(paths)
+					: paths.split("\n").filter(line => line.trim()).map(line => JSON.parse(line.replace(/^[ \t]+-[ \t]*/, "")));
+			}
+			const expected = file.startsWith(".omp/") ? standard.paths.flatMap(glob => [`tool:edit(${glob})`, `tool:write(${glob})`]) : standard.paths;
+			if (JSON.stringify(actual) !== JSON.stringify(expected)) finding("FAIL", "standards", file, "scope differs from installed standards metadata");
+		} catch {
+			finding("FAIL", "standards", file, "cannot parse rendered scope");
+		}
+	}
+	comparePair(`.omp/rules/${standard.name}.md`, `.claude/rules/${standard.name}.md`);
+	for (const glob of standard.paths) {
+		try {
+			const pattern = new Bun.Glob(glob);
+			let matched: boolean;
+			if (rootRepository) {
+				matched = false;
+				for (const prefix of inventoryRepositories.keys()) {
+					if (repositoryFiles.get(prefix)?.some(file => pattern.match(file))) { matched = true; break; }
+				}
+			} else {
+				matched = [...pattern.scanSync({ cwd: root, dot: true, onlyFiles: true, followSymlinks: false })]
+					.some(file => !file.split("/").some(part => part === ".git" || part === "node_modules"));
+			}
+			if (!matched) {
+				if (unavailableRepositories.size) finding("CANNOT-EVALUATE", "standards", canonical,
+					`cannot evaluate glob ${glob}: unavailable repositories: ${[...unavailableRepositories].join(", ")}`);
+				else finding("FAIL", "standards", canonical, `glob matches no repository file: ${glob}`);
+			}
+		} catch (error) {
+			finding("CANNOT-EVALUATE", "standards", canonical, `cannot evaluate glob ${glob}: ${String(error)}`);
+		}
+	}
+	if (standard.name === "excluded-data") {
+		const dir = standard.dir ?? "excluded_data";
+		const destination = physicalPath(path.resolve(root, dir));
+		const repo = repositoryFor(destination);
+		if (!repo) finding("CANNOT-EVALUATE", "excluded-data-ignore", dir, "cannot evaluate ignore policy without a git repository");
+		else {
+			const folder = `${path.relative(repo, destination)}/`;
+			const ignored = spawnSync("git", ["check-ignore", "-q", "--", folder], { cwd: repo, encoding: "utf8" });
+			if (ignored.status === 1) finding("FAIL", "excluded-data-ignore", dir, "folder is not ignored; add its one folder ignore line");
+			else if (ignored.status !== 0) finding("CANNOT-EVALUATE", "excluded-data-ignore", dir,
+				`git check-ignore failed: ${String(ignored.stderr ?? "").trim() || String(ignored.error ?? ignored.signal)}`);
+		}
+	}
+}
+for (const specialist of specialists) for (const glob of specialist.paths) {
+	try {
+		const pattern = new Bun.Glob(glob);
+		const matched = rootRepository
+			? [...repositoryFiles.values()].some(files => files.some(file => pattern.match(file)))
+			: [...pattern.scanSync({ cwd: root, dot: true, onlyFiles: true, followSymlinks: false })]
+				.some(file => !file.split("/").some(part => part === ".git" || part === "node_modules"));
+		if (!matched) finding(unavailableRepositories.size ? "CANNOT-EVALUATE" : "FAIL", "specialists", configPath,
+			`glob matches no repository file: ${glob}${unavailableRepositories.size ? `; unavailable repositories: ${[...unavailableRepositories].join(", ")}` : ""}`);
+	} catch (error) { finding("FAIL", "specialists", configPath, `invalid dispatch glob ${glob}: ${String(error)}`); }
+}
 // Placeholder ownership is the installed harness's text surface, not the project tree.
 // Exclude project sources (JSX), workflows, Makefiles, fonts/images, and nested checkouts.
 const placeholderFiles = new Set([
 	"AGENTS.md", "CLAUDE.md", "docs/index.md", "docs/gaps.md", "docs/gaps-archive.md",
 	"docs/architecture/README.md", "docs/architecture/pitfalls.md", "docs/architecture/open-questions.md", "docs/kit/maintenance.md",
 	"docs/plans/README.md", "docs/plans/TEMPLATE.md", "docs/product/README.md",
+	...(diagramsOn && diagramsRoot ? [`${diagramsRoot}/README.md`] : []),
 	...harnessFiles, ...processFiles,
+	...standards.map(standard => `docs/standards/${standard.name}.md`),
 	...(trackingMode === "local" ? files("placeholders", "docs/tracker", false).filter(file => file.endsWith(".json")) : []),
 	...files("placeholders", "tools").filter(file => file.endsWith(".ts")),
 ]);

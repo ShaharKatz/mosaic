@@ -13,6 +13,7 @@ Read [the documentation index](../index.md) for project documents and [the archi
 | Reviewers | Independently check the diff and return verdicts as required by the active runtime's review procedure |
 | registry-scout | Filters standing records by scope; returns identifiers and pointers |
 | context-scout | Briefs a code/doc area with concepts, excerpts, and pointers |
+| stack-operator | Runs approved local-stack acceptance scenarios under the project's procedure |
 | Human | Approves plans, signs off results, owns overrides and hook escape decisions |
 ## Lifecycle
 `draft → approved → executing → review → done / abandoned`
@@ -22,11 +23,11 @@ Read [the documentation index](../index.md) for project documents and [the archi
 | `draft → approved` | Human only; orchestrator records verbal approval | First task-branch commit, or a docs branch landed on {{DEFAULT_BRANCH}} |
 | `approved → executing` | Orchestrator | First task-branch commit |
 | `executing → review` | Orchestrator after task approvals and recorded Verification output | Task-branch commit |
-| `review → done` | Human sign-off; orchestrator records it | Task-branch commit and archive, then land; ledger sync per `rule://plan-home` |
+| `review → done` | Human sign-off; orchestrator records it | {{CLOSE_OUT_DEFAULT}}Task-branch commit and archive, then land; ledger sync per `rule://plan-home`{{/CLOSE_OUT_DEFAULT}}{{CLOSE_OUT_TWO_COMMIT}}Squashed code commit, then one close-out commit in each pull request that owns terminal records (archive, ledger landing locator, registry sync);{{MULTI_REPO}} member-homed plans keep R4's link-repo ledger sync after the member merges;{{/MULTI_REPO}} land per `rule://git-flow`{{/CLOSE_OUT_TWO_COMMIT}} |
 | Any status `→ abandoned` | Orchestrator or human; one-line reason | Archive in the home repo; mark and repoint ledger rows |
 ## Work selection
 Read `rule://plan-triage` to choose inline mechanical work, the light path, or a numbered plan.
-The light path is still a loop: in-memory plan → executor → commit → reviewer (base..head) → corrections → re-review → land.
+The light path is still a loop: in-memory plan → executor → commit → reviewer (base..head) → substantive (`S`) repairs → delta-round review → {{LANDING_PULL_REQUEST}}pull request → final review for code, CI and comments → {{/LANDING_PULL_REQUEST}}land.
 It omits the plan doc and formal planning approvals; read `rule://plan-triage` for recording and early exits.
 ## Read at the step
 | Need | Read |
@@ -35,6 +36,10 @@ It omits the plan doc and formal planning approvals; read `rule://plan-triage` f
 | Branch, commit, land | `rule://git-flow` |
 | Bound executor work and parallel waves | `rule://dispatch` |
 | Review inputs, verdicts, retries, conflicts | `rule://review-loop` |
+| Local-stack acceptance after task approvals and other Verification, before {{LANDING_PULL_REQUEST}}final review{{/LANDING_PULL_REQUEST}}{{LANDING_DIRECT}}sign-off{{/LANDING_DIRECT}} | `rule://stack-acceptance` |
+{{LANDING_PULL_REQUEST}}
+| Final open-PR review, replay, comments and exact-head CI | `rule://final-review` |
+{{/LANDING_PULL_REQUEST}}
 | Verification, Unverified, durable evidence | `rule://verification` |
 | Route knowledge or change governed files | `rule://records` |
 | Find relevant registries or code context | `rule://registries` |

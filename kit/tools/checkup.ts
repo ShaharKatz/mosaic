@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Run from the link root. Exit 0: PASS; 1: findings; 2: incomplete evaluation.
+// Run from the link root. Exit 0: PASS; 1: findings; 2: incomplete evaluation. --gate exempts orphan-plan findings.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
@@ -7,6 +7,7 @@ import { realpathWithinRoot } from "./root-containment.ts";
 
 const classes = ["lint", "doctor", "dangling-reference", "stale-plan-link", "stale-trigger", "orphan-plan"] as const;
 type CheckClass = typeof classes[number];
+const informationalClasses: Readonly<Partial<Record<CheckClass, true>>> = { "orphan-plan": true };
 type Finding = { class: CheckClass; path: string; line: number; detail: string; fix: "mechanical" | "route" | "human" };
 const findings: Finding[] = [];
 const cannotEvaluate: { class: CheckClass; path: string; detail: string }[] = [];
@@ -17,28 +18,33 @@ function unavailable(kind: CheckClass, file: string, detail: string): void {
 }
 const args = process.argv.slice(2);
 const json = args.includes("--json");
+const gate = args.includes("--gate");
 function finish(): never {
 	const order = (a: { class: CheckClass; path: string }, b: { class: CheckClass; path: string }) =>
 		classes.indexOf(a.class) - classes.indexOf(b.class) || a.path.localeCompare(b.path);
 	findings.sort((a, b) => order(a, b) || a.line - b.line || a.detail.localeCompare(b.detail));
 	cannotEvaluate.sort((a, b) => order(a, b) || a.detail.localeCompare(b.detail));
-	const outcome = cannotEvaluate.length ? "CANNOT-EVALUATE" : findings.length ? "FAIL" : "PASS";
+	const hasFailures = findings.some(item => !gate || !informationalClasses[item.class]);
+	const outcome = cannotEvaluate.length ? "CANNOT-EVALUATE" : hasFailures ? "FAIL" : "PASS";
 	if (json) console.log(JSON.stringify({ findings, cannotEvaluate }, null, 2));
 	else {
 		console.log("CLASS | LOCATION | FIX | DETAIL");
-		for (const item of findings) console.log(`${item.class} | ${item.path}:${item.line} | ${item.fix} | ${item.detail.replace(/\s*\n\s*/g, " ")}`);
+		for (const item of findings) console.log(`${item.class} | ${item.path}:${item.line} | ${item.fix} | ${item.detail.replace(/\s*\n\s*/g, " ")}${gate && informationalClasses[item.class] ? " (informational; gate-exempt)" : ""}`);
 		for (const item of cannotEvaluate) console.log(`${item.class} | ${item.path} | CANNOT-EVALUATE | ${item.detail.replace(/\s*\n\s*/g, " ")}`);
-		console.log(`checkup: ${outcome} — ${findings.length} findings, ${cannotEvaluate.length} cannot-evaluate`);
+		const exemptCount = gate ? findings.reduce((count, item) => count + Number(Boolean(informationalClasses[item.class])), 0) : 0;
+		console.log(`checkup: ${outcome} — ${findings.length} findings, ${cannotEvaluate.length} cannot-evaluate${gate ? `, ${exemptCount} gate-exempt` : ""}`);
 	}
-	process.exit(cannotEvaluate.length ? 2 : findings.length ? 1 : 0);
+	process.exit(cannotEvaluate.length ? 2 : hasFailures ? 1 : 0);
 }
 let rootArg: string | undefined;
 let sawJson = false;
+let sawGate = false;
 for (let i = 0; i < args.length; i++) {
 	if (args[i] === "--json" && !sawJson) sawJson = true;
+	else if (args[i] === "--gate" && !sawGate) sawGate = true;
 	else if (args[i] === "--root" && rootArg === undefined && args[i + 1] && !args[i + 1]!.startsWith("--")) rootArg = args[++i];
 	else {
-		for (const kind of classes) unavailable(kind, ".", "usage: bun tools/checkup.ts [--root dir] [--json]");
+		for (const kind of classes) unavailable(kind, ".", "usage: bun tools/checkup.ts [--root dir] [--json] [--gate]");
 		finish();
 	}
 }

@@ -4,6 +4,9 @@
   "tracking": {
     "mode": "local"
   },
+  "landing": {
+    "mode": "direct"
+  },
   "kit": {
     "commit": "fixture"
   }

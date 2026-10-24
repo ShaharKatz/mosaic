@@ -1,7 +1,8 @@
 # Gaps Registry (G-x)
 
-Open **engineering obligations with triggers** — things a finished plan left unverified or
-deliberately deferred, that a *future* plan must pick up when its trigger fires. Each entry is
+Open **engineering obligations with triggers** — duties a finished plan deliberately deferred to a
+checkable condition that fires on its own, which a *future* plan must pick up when that trigger fires;
+verification nobody performed is not a duty and stays in the plan's Unverified section (`rule://records`). Each entry is
 citable as `G-<n>` (same greppable-namespace convention as decisions `D#`, pitfalls `P-x`, and
 product flows `F-x`).
 

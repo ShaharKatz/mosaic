@@ -10,6 +10,11 @@
 | [gaps-archive.md](gaps-archive.md) | Closed obligation evidence | Auditing a closed entry |
 | [plans/README.md](plans/README.md) | Master ledger for every repo | Reserving a number or locating a plan |
 | [plans/TEMPLATE.md](plans/TEMPLATE.md) | Plan schema | Authoring a plan |
+{{DIAGRAMS_DRAWIO}}
+| Diagram contract at `{{DIAGRAMS_ROOT}}/README.md` | File/cell contract, provenance, transitions | Editing or reviewing topology |
+| `diagrams` skill and `diagram-keeper` | MCP editing and validated worktree evidence, no commits | A plan's last diagram task |
+| `bun tools/diagram-check.ts`, `bun tools/diagram-delta.ts` | Offline validation, normalization, projection, delta and comparison | Checking topology and plan close-out |
+{{/DIAGRAMS_DRAWIO}}
 {{TRACKING_LOCAL}}| `/mosaic-intake` | Read-only request investigation and human digest | Investigating an external request |
 {{/TRACKING_LOCAL}}{{TRACKING_MCP}}| `/mosaic-intake` | Read-only request investigation and human digest | Investigating an external request |
 {{/TRACKING_MCP}}| `/mosaic-checkup`, [sweep tool](../tools/checkup.ts) | Deterministic drift sweep and human digest (`bun tools/checkup.ts [--root dir] [--json]`; exits 0 PASS / 1 findings / 2 CANNOT-EVALUATE) | Checking project records |
@@ -17,6 +22,12 @@
 | [local tracker inventory](tracker/items.json) | Recorded items, discussion, and managed intent | Following local tracking mode |
 {{/TRACKING_LOCAL}}{{TRACKING_MCP}}| Runtime MCP server `{{MCP_SERVER}}` | Live intent, discussion, and intake through runtime tools | Following MCP tracking mode in the [tracker rule](process/tracker.md) |
 {{/TRACKING_MCP}}| [Maintaining the kit](kit/maintenance.md) | `/mosaic-kit`: recorded adaptations, project harness additions, model roles, upgrades | Explicitly requested kit maintenance only |
+{{FRONTEND_REVIEW}}
+| `/frontend-review`, `frontend-reviewer` | Read-only frontend architecture, reuse, callers and contracts; human-first evidenced result | A pinned diff matches the specialist dispatch table |
+{{/FRONTEND_REVIEW}}
+{{REVIEW_ENGINE}}
+| `/review-with-codex` | Optional read-only snapshot review with [harness](../tools/codex-review-harness.ts) and strict [schema](../tools/codex-review-schema.json) | Human explicitly selects Codex; never the default engine |
+{{/REVIEW_ENGINE}}
 ## Process rules
 | Rule | Purpose | Read when |
 |---|---|---|
@@ -25,9 +36,17 @@
 | [intake](process/intake.md) | Request evidence, risk, and proposed dispositions | Investigating an external request |
 | [tracker](process/tracker.md) | Installed tracking mode, coordination authority, writer discipline, and operations | Intent, collision checks, intake writeback, lifecycle events |
 | [git-flow](process/git-flow.md) | Target-repo branch and landing commands | Branching, committing, landing |
+{{LANDING_PULL_REQUEST}}
+| [stacked-prs](process/stacked-prs.md) | Repository base declarations and read-only stack resolver | A parent branch changes or lands; before review, squash, push, landing |
+{{/LANDING_PULL_REQUEST}}
 | [dispatch](process/dispatch.md) | Bounded task and parallel ownership | Authoring tasks or dispatching executors |
 | [review-loop](process/review-loop.md) | Verdicts and correction cycle | Reviewing tasks or findings |
+{{LANDING_PULL_REQUEST}}
+| [final-review](process/final-review.md) | Open-PR final review, replay, comments and exact-head CI | PR opens, head changes, readiness or merge |
+{{/LANDING_PULL_REQUEST}}
 | [verification](process/verification.md) | Evidence and registry lifecycle | Writing/running verification or interpreting a failure |
+| [stack-acceptance](process/stack-acceptance.md) | Local-stack scenarios, keyless envelope and safety gates | Writing or running plan Verification |
+| `stack-operator` | Runs approved acceptance scenarios using the project's Local stack procedure | Local-stack acceptance |
 | [records](process/records.md) | Doc classes, routing, schemas | Editing a governed file |
 | [registries](process/registries.md) | Scope-based reading | Checking records or unfamiliar areas |
 | [plan-home](process/plan-home.md) | Homes, numbering, ledgers, paths | Preparing a plan or syncing status |
@@ -38,7 +57,10 @@
 | [records-guard](process/records-guard.md) | Governed-edit reminder | Before matching edits/writes; interrupt-scoped |
 | [mosaic-core](process/mosaic-core.md) | Integrity, authority, evidence | Always applied |
 | [model-notes](process/model-notes.md) | Deferred family prompts | Model configuration; human decides placement |
-## Repo map
+{{DIAGRAMS_DRAWIO}}
+| [diagrams](process/diagrams.md) | Architecture deltas, direction decisions and receipts | Planning, editing or closing an architectural change |
+{{/DIAGRAMS_DRAWIO}}
+{{STANDARDS}}## Repo map
 | Path | Contents |
 |---|---|
 | Project entry | Current runtime's authority and session instructions |

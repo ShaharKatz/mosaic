@@ -215,7 +215,7 @@ function validatePlan(content: string): string[] {
 function validateLedger(content: string): string[] {
 	const errors = duplicates(idsMatching(content, LEDGER_ROW)).map(
 		d =>
-			`duplicate plan number '${d}' — one row per plan; a second row makes the ledger ambiguous about status and landed commit`,
+			`duplicate plan number '${d}' — one row per plan; a second row makes the ledger ambiguous about status and landing locator`,
 	);
 	for (const raw of content.split("\n")) {
 		const line = raw.replace(/\r$/, "");
@@ -232,13 +232,13 @@ function validateGaps(content: string, archive: boolean): string[] {
 	const errors = dupErrors(idsMatching(content, GAP_ENTRY), "gap");
 	for (const { id, body, lines } of gapEntries(content, !archive)) {
 		if (archive) {
-			// Closure is written several ways and all are legitimate: `closed by NNNN (<hash>)`,
+			// Closure is written several ways and all are legitimate: `closed by NNNN (<landing locator>)`,
 			// `**CLOSED by 0054 T6**`, `**Overtaken by ...**`, `**Status:** archived as overtaken`.
 			// Case-fold and accept the family; the fence is that SOMETHING says what discharged it.
 			const up = body.toUpperCase();
 			if (!/CLOSED BY/.test(up) && !/OVERTAKEN BY/.test(up) && !/\*\*STATUS:\*\* *(CLOSED|ARCHIVED)/.test(up)) {
 				errors.push(
-					`${id} records no evidence of what closed it — an archived gap documents that the check happened and what discharged it (closed by NNNN (<hash>))`,
+					`${id} records no evidence of what closed it — an archived gap documents that the check happened and what discharged it (closed by NNNN (<landing locator>))`,
 				);
 			}
 			continue;

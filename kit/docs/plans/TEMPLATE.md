@@ -5,6 +5,10 @@ status: draft        # draft | approved | executing | review | done | abandoned
 created: YYYY-MM-DD
 repo: {{MEMBERS}}       # {{MULTI_REPO}}{{MEMBERS}} | link-repo; one member ⇒ home there; link-repo or multiple ⇒ home in link repo{{/MULTI_REPO}}{{MONOREPO}}every plan is link-homed, including single-component work{{/MONOREPO}}
 branch: task/NNNN-<slug>
+{{LANDING_PULL_REQUEST}}
+bases:               # exactly the repositories carrying this branch; cross-repo includes link-repo
+  {{MEMBERS}}: { base: {{DEFAULT_BRANCH_YAML}}, base-pr: null }
+{{/LANDING_PULL_REQUEST}}
 {{TRACKING_LOCAL}}
 tracker:
   provider: replay
@@ -40,6 +44,21 @@ element-doc sentence) by content with its catalog or doc, never a number.
 Explicit non-goals. Check the [architecture docs](../architecture/README.md) and the pitfall
 catalogs of the targeted repos (`rule://registries`) for things to fence out.
 
+{{DIAGRAMS_DRAWIO}}
+## Architecture delta
+
+- adds: none
+- realizes: none
+- builds: none
+- retires: none
+- removes: none
+- withdraws: none
+- changes: none
+- diagrams: none
+
+Entries are `<file>#<id>`, optionally with `(D<n>, plan:NNNN)` or `(D<n>, tracker://<key>)`, per `{{DIAGRAMS_ROOT}}/README.md`.
+
+{{/DIAGRAMS_DRAWIO}}
 ## Task breakdown
 
 One block per executor task. Design `files:` sets to be disjoint wherever parallel execution is wanted.
@@ -59,11 +78,18 @@ Path-frame example: {{MULTI_REPO}}member-homed `reads: ../docs/...` versus prose
 
 Concrete checks the reviewer runs against the diff; a check restates the relevant trap as the check
 itself (what to grep or run), never as a P-number.
+{{DIAGRAMS_DRAWIO}}
+The Architecture delta matches `bun tools/diagram-delta.ts compare <plan> <base sha> HEAD`.
+{{/DIAGRAMS_DRAWIO}}
 
 ## Verification
 
 Read `rule://verification`; list runnable checks and expected evidence.
 For negative probes, follow that rule's reject, revert, and rebuild sequence.
+
+### Stack acceptance
+
+Read `rule://stack-acceptance`: `stack: none — <reason>`, or the smallest stack and scenarios (`S<k>`: proves, `exercises:`, drive, passing observation, edge cases and why). If the project's Local stack says `none`, declare `stack: none — no local stack`.
 
 ### Unverified
 
@@ -84,6 +110,7 @@ the human's disposition. A waived debate records the waiver (who, why) instead. 
 Filled during execution: task → agent → result; reviewer verdicts; deviations from plan and why;
 final verification output.
 Log per `rule://review-loop`: one verdict per task/reviewer/round, followed by its findings.
+Stack scenarios log per `rule://stack-acceptance`.
 ```text
 - <task> R<round> <reviewer>: APPROVE|REVISE (<n> findings)
 - <task> R<round> <reviewer>: <S|P> — <finding in ≤ 15 words> → <fixed|rejected: reason|deferred: where>

@@ -23,6 +23,7 @@ features here regardless of topology; use an agreed milestone directory when app
 milestone is required to start a feature doc. Skeleton:
 
 - **Header block**: Status · Actors · Areas touched (repositories or components)
+- **Frontmatter `verified:`** — `"yes"` when current evidence supports the Status value, or `"no — see open question OQ-<n>"` naming the open question that holds the contradiction. Verification is distinct from status: shipped never implies checked live.
 - **Flow** — numbered steps across actors and areas
 - **Decisions inherited** — links to the D-numbers this flow builds on
 - **Feature-scoped decisions** — small-caliber choices that don't warrant a D-number
@@ -67,7 +68,7 @@ implementing an actual change** in a repo.
 - **Why:** running the full flow for data-only changes wastes time and money and bloats the master
   ledger without changing code or behavior.
 - **How exempt changes land:** still never on `{{DEFAULT_BRANCH}}` (the guard-main hook applies) — use a
-  short-lived `docs/<slug>` branch, land rebase-first `--ff-only` as usual. No plan doc, no ledger
+  short-lived `docs/<slug>` branch, {{LANDING_DIRECT}}land rebase-first `--ff-only` as usual{{/LANDING_DIRECT}}{{LANDING_PULL_REQUEST}}land through the pull-request sequence in `rule://git-flow`{{/LANDING_PULL_REQUEST}}. No plan doc, no ledger
   row, no executor/reviewer dispatch; the orchestrator does the work inline with the human directing
   in-session.
 - **The line:** the moment ingested material implies *action* (code, automation, or project configuration),

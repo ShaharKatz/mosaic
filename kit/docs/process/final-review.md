@@ -1,0 +1,42 @@
+---
+description: "Review the open pull request once, replay later own-code deltas, and rule on comments and exact-head CI before readiness."
+---
+Read when: a pull request opens, its head changes, or it is about to be called ready or merged.
+# Final review on the open pull request
+- Applies in pull-request mode to plans and light-path work. Fetch the PR's actual base branch and pin its `<base sha>` and the local `<head sha>`; never review a moving ref. The first round reviews the full PR diff: `git diff --no-renames <base sha>...<head sha>`, not the whole codebase.
+- A code path is outside `docs/` and does not end in `.md`. Classify `git diff --no-renames --name-only <base sha>...<head sha>`; a failed diff counts as code. Docs-only and inline work skip final code review with a reason in the Execution log or commit, but still complete the comments and CI gate below.
+- Run after the PR opens: for plans, after task approvals, Verification including `rule://stack-acceptance`, sign-off and the selected close-out procedure; for light work, after the ordinary reviewer's APPROVE and any required stack acceptance, without a plan document or formal planning ceremony. Run alongside CI and bots; repair their findings together.
+- Default engine: `gpt-reviewer`; Claude Code dispatches its `reviewer` body for the corresponding configured role per `rule://dispatch`. A human may select another available engine (for example Codex); this rule assumes no optional skill or harness{{REVIEW_ENGINE}} for its default engine{{/REVIEW_ENGINE}}. Unavailable models, access failures or unresolved disagreements block approval: report the exact failure, ask the human to restore access or waive the review, and name the waiver's author. Never turn failure into APPROVE.
+{{REVIEW_ENGINE}}
+- When the human selects Codex, invoke `skill://review-with-codex` (Claude Code: `.claude/skills/review-with-codex/SKILL.md`) with the inputs below and the caller's pinned base (`base_sha` from `rule://stacked-prs` when stacked). Codex is optional; missing CLI/login or failed read-only posture blocks that engine, never triggers automatic installation/login or a fabricated approval.
+{{/REVIEW_ENGINE}}
+- Give every engine the pinned base/head, plan and Review checklist or in-memory acceptance with `no plan`, the pitfall catalogs of every touched repo and the link ([pitfalls.md](../architecture/pitfalls.md){{MULTI_REPO}}, `<member>/docs/pitfalls.md`{{/MULTI_REPO}}), ruled findings and available verification/scenario evidence. Carry ruled findings forward; do not reopen without new evidence.
+- Lean verdict: only substantive (`S`) code/contract defects, false behavior claims, broken landings, safety/isolation gaps or missing plan-named acceptance coverage require REVISE. Procedural (`P`) records, receipts and prose gaps are notes for the orchestrator, not another round. Keep the verdict to at most 15 lines before findings. Reuse verification for the reviewed commit and run only covering tests.
+- Return APPROVE or REVISE with numbered actionable findings per `rule://review-loop`. An optional engine's ship maps to APPROVE only with no action-required finding or disagreement; revise/block maps to REVISE. Log the actual engine, never a fixed engine name:
+  `- final R<n> <engine>: APPROVE|REVISE (<n> findings)`
+  `- final R<n> <engine>: reviewed <sha> on <base sha>`
+# Replay a later head (Git 2.40+)
+- Before readiness and again before merge, check whether the last round covers HEAD. Use the base SHA recorded with that round, the last reviewed SHA and the freshly pinned current PR base SHA. Missing recorded base, missing objects or any failed command require a full round, never an exemption.
+- Run these exact commands, substituting the recorded/pinned values; retain exit codes and output:
+  `git merge-base <recorded base sha> <last reviewed sha>` → `<old base>`
+  `git merge-base <base sha> HEAD` → `<new base>`
+  `git merge-tree --write-tree --merge-base <old base> <new base> <last reviewed sha>` → first output line is `<replayed tree>`
+  `git diff --no-renames <replayed tree> HEAD` → own change since the round; classify its paths with `git diff --no-renames --name-only <replayed tree> HEAD`.
+- Merge-tree exit 0 is clean; exit 1 is acceptable only with a valid tree and a complete conflict-path list. Use the stage-entry section after the first line (before its blank separator) to identify every conflict path. Docs-only conflicts do not force a round; code conflicts always do. Other exits, malformed output or an unclassifiable path require a full round.
+- Empty own-code delta means no round after an unchanged head, rebase, restack or squash; record the check and current head/base. Base-inherited changes are covered by CI on the new head, not re-reviewed as this branch's work. A docs-only delta likewise needs no round.
+- Otherwise give the engine only the own-code delta, verifying repairs and absence of new S findings. Widen inspection for changed contracts, guards or safety-critical paths. For each code-conflict path, supply both patches below so a dropped reviewed hunk cannot disappear unnoticed:
+  `git diff --no-renames <old base> <last reviewed sha> -- <path>`
+  `git diff --no-renames <new base> HEAD -- <path>`
+- Route repairs and comment fixes together through `rule://review-loop`: owning executor repairs, required task reviewers approve the repair delta, then the final engine sees any own-code delta. Re-run affected verification and any installed acceptance scenarios exercising the changed paths before review.
+- At most two final-review REVISE rounds, then the human decides. Repair task reviews retain their own two-cycle limit under `rule://review-loop`.
+# Evidence
+- Plans retain each round's `review.md`, `test-results.txt` and engine artifacts under `docs/plans/evidence/<NNNN>/final-review/R<n>/`, with verdict, reviewed/base SHAs and finding dispositions in the Execution log. The sign-off brief says this review runs on the open PR. Follow `rule://git-flow`'s selected close-out layout for evidence/log recording; do not impose a two-commit layout when it is not configured.
+- Light-path artifacts stay in the run directory; its commit body carries the same verdict/reviewed/base lines and comment dispositions. Preserve them when amending messages; a plain fixup discards its message. Recording evidence may change HEAD: replay again, then repeat post-push checks. The readiness message names the verdict and reviewed commit (or recorded exemption) and the exact checked head.
+# Comments and exact-head CI (every pull request)
+- After opening and after every push, wait until every check on the head finishes, then read all pages of every surface, bots included:
+  `gh api repos/<owner>/<repo>/issues/<n>/comments --paginate`
+  `gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate`
+  `gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate`
+- A failed fetch is a failure, never an empty comment list. Rule on every comment/review body/inline comment through `rule://review-loop`: fix and reverify/review the repair delta, or answer rejected findings on the PR with a code-grounded reason. Log each surface's author and ID (include the surface to disambiguate IDs): `- pr <surface>/<comment id> <author>: <S|P> — <summary> → <fixed|rejected: reason>`. Push repairs and repeat this gate.
+- Before calling the PR ready and before merge, read local `git rev-parse HEAD` and `gh pr view <n> --json headRefOid,baseRefName`; require matching local/remote heads. For that exact SHA, read all pages of check runs (`gh api repos/<owner>/<repo>/commits/<head sha>/check-runs --paginate`) and individual commit statuses (`gh api repos/<owner>/<repo>/commits/<head sha>/statuses --paginate`, most recent entry per context). Judge those entries, not the combined-status endpoint's aggregate state. Require at least one successful check run or success commit status, none pending, failing or cancelled; action-required, timed-out, stale, startup-failure or unknown results block. Zero commit statuses plus at least one successful check run satisfies the gate when no check blocks it. Report skipped/neutral checks by name; they do not count as a pass. No checks is not green.
+- Re-read local HEAD and remote head/base after the reads; changed head or base invalidates the gate: repin, replay/review as needed and reread checks/comments. Only a stable exact-head result permits readiness. A review waiver or docs-only/inline exemption does not waive CI or comments.

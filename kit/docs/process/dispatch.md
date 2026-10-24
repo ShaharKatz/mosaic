@@ -7,10 +7,11 @@ The role is fixed by the phase, not by the kind of file touched; task class sele
 | Phase | Acts | Never |
 |---|---|---|
 | Planning (`/mosaic-plan`) | orchestrator drafts{{TRACKING_MCP}} and handles tracking per `rule://tracker`{{/TRACKING_MCP}}; `context-scout`/`registry-scout`{{TRACKING_LOCAL}}/`tracker-scout`{{/TRACKING_LOCAL}} read | executor, reviewers |
-| Task implementation (`/mosaic-execute` steps 3–4) | `executor` per task (code, tests, or documents alike); reviewers per task class below | orchestrator editing task files |
+| Task implementation (`/mosaic-execute` steps 3–4) | `executor` per task (code, tests, or documents alike);{{DIAGRAMS_DRAWIO}} `diagram-keeper` for the last diagram task;{{/DIAGRAMS_DRAWIO}} reviewers per task class below | orchestrator editing task files |
 | REVISE repair | `executor` re-dispatched with the findings, or the orchestrator for a mechanical correction (read `rule://review-loop`) | reviewers editing |
+| Verification (`/mosaic-execute` step 5) | orchestrator runs Verification; `stack-operator` runs scenarios under `rule://stack-acceptance` | executor except a REVISE repair |
 | Close-out (`/mosaic-execute` steps 7–9) | orchestrator writes dispositions, the Execution log, and mechanical corrections; `librarian` proposes doc alignment; both reviewers review the closure packet | `executor` (except a REVISE repair of a plan task) |
-| Landing and registry sync (`/mosaic-execute` steps 10–13) | orchestrator | agents |
+{{LANDING_DIRECT}}| Landing and registry sync (`/mosaic-execute` steps 10–13) | orchestrator | agents |{{/LANDING_DIRECT}}{{LANDING_PULL_REQUEST}}| Landing, final review and registry sync (`/mosaic-execute` steps 10–13) | orchestrator; default `gpt-reviewer` final engine per `rule://final-review` (Claude: `reviewer` for the corresponding configured role) | agents except authorized review/repair |{{/LANDING_PULL_REQUEST}}
 # Task contract
 | Field | Required content |
 |---|---|
@@ -23,8 +24,12 @@ Read `rule://plan-home` R5 for path relativity and per-task `repo:`; tasks use t
 - For `class: docs`, `acceptance:` is ledger lint, `bun tools/doctor.ts`, and `bun tools/checkup.ts`, plus a source citation (archive or code path) on every new statement. Whole-tree gates follow the join rule below.
 - A `docs` task wave gets exactly one reviewer cross-family to the executor's resolved `@templated` model: GPT → `claude-reviewer`; Claude → `gpt-reviewer`. Resolve the role from the project's model settings, not the agent's name. Group review waves by class.
 - `code` task waves and every closure packet require both `claude-reviewer` and `gpt-reviewer`, independently, in parallel. In Claude Code, use its `reviewer` body for each reviewer role with the corresponding model; unavailable models follow `rule://review-loop`, never a silent single-reviewer closure.
+{{SPECIALISTS}}
+- Path-selected specialists add to the ordinary review roles; select and deduplicate them using the dispatch table in `rule://review-loop`, with the identical pinned repository/base/head and project context.
+{{/SPECIALISTS}}
 # Dispatch
 - Parallelize only when resolved `files:` sets are disjoint; overlap runs sequentially. Per-task acceptance may not depend on a sibling's output still in flight: whole-tree gates (doctor, checkup, link checks) run once after the wave joins, not inside each parallel task. Files in different repos are distinct even when repo-relative strings match.
+- Executors sharing a worktree never run commands that change its environment (dependency sync/install or toolchain switches; for example, `npm ci`, `npm install`, or `pip install`): a sibling task can lose tools mid-run. Use no-sync execution where supported and report a missing tool instead of installing it.
 - Give the executor only its verbatim task block, the plan's Context, its `reads:`, acceptance criteria, and the repo it runs in. Exclude the whole plan and sibling tasks.
 - Every execute/review dispatch must read [targeted-tests](targeted-tests.md) (loaded automatically inside executor and reviewer agents; the main session reads the file); agent loading supplies the same rule automatically where supported.
 - Ambiguity, contradiction with observed repo state, or a needed architectural decision → STOP and report the exact conflicting task/rule clause and observation. Routine choices with no observable difference stay with the executor.

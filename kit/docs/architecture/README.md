@@ -4,11 +4,11 @@ Each element doc includes the context and rejected alternatives needed to apply 
 
 ## Scope
 
-Project-level architecture decisions live here; implementation and tests live in their owning repository or component.
+Project-wide architecture truth lives here; each owning repository or component keeps its own implementation docs and tests. This file indexes the element docs.
 
 ## How to read this
 
-- **The element docs state how the system is and why.** Each carries its current rules as prose, keeping a rejected alternative only while it still guards a path; dates, who decided, and measurements live in the commit or the owning plan. **Treat a recorded rule as settled unless new facts invalidate its rationale.** Rulings are recorded through the minting gate in `rule://records` (prose, and a pitfall where later work must adapt); numbered decisions (`D<n>`) are a legacy form with no new numbers.
+- **The element docs state how the system is and why.** Each carries its current rules as prose, keeping a rejected alternative only while it still guards a path; dates, who decided, and measurements live in the commit or the owning plan. **Treat a recorded rule as settled unless new facts invalidate its rationale.** Rulings are recorded through the minting gate in `rule://records` (prose, and a pitfall where later work must adapt); numbered decisions (`D<n>`) are a legacy form with no new numbers{{DIAGRAMS_DRAWIO}}, except diagram decisions (Decision map below){{/DIAGRAMS_DRAWIO}}.
 - **Check proposals against the pitfall catalogs** ([pitfalls.md](pitfalls.md) for cross-repo and devops traps{{MULTI_REPO}}; `<member>/docs/pitfalls.md` for a member's own{{/MULTI_REPO}}), selected per `rule://registries`. Starter traps are general checks, not measured incidents of this project; apply them only where current project evidence supports them.
 - **[open-questions.md](open-questions.md) records unresolved cross-cutting questions.** Ask the owner when a new material ambiguity is not already settled by a recorded decision; record a durable question if it outlives the work.
 
@@ -20,6 +20,15 @@ an actual member repo where applicable, or `cross-area` for shared truth — see
 | Doc | Scope | Area affinity |
 |---|---|---|
 
+{{DIAGRAMS_DRAWIO}}
+## Decision map (diagram decisions)
+
+A change to intended architecture under the decision predicate in `rule://diagrams` is the only newly numbered decision; number and record it per `rule://records`. Diagram elements cite these rows or, where it exists, the frozen `decisions-archive.md`.
+
+| Decision | Title | File |
+|---|---|---|
+
+{{/DIAGRAMS_DRAWIO}}
 ## Pitfall catalogs
 
 **[pitfalls.md](pitfalls.md)** holds the cross-repo and devops traps{{MULTI_REPO}}; each member's own traps live in its `<member>/docs/pitfalls.md`{{/MULTI_REPO}}. Numbering, removal and the no-citation rule: `rule://records`; selection: `rule://registries`.
@@ -37,8 +46,8 @@ See the [project stack](../process/stack.md).
 
 When extending this record, keep the guardrails intact:
 
-- **New rulings** are sentences in the relevant element doc, routed through the minting gate in `rule://records`; no new D-number. Keep existing `### D<number> —` headings greppable.
-- **A project with numbered decisions** (`D<n>`) keeps their map frozen in `decisions-archive.md` and their `### D<number> —` sections in the element docs; the map gains no rows.
+- **New rulings** are sentences in the relevant element doc, routed through the minting gate in `rule://records`; no new D-number{{DIAGRAMS_DRAWIO}} except a diagram decision (Decision map above){{/DIAGRAMS_DRAWIO}}. Keep existing `### D<number> —` headings greppable.
+- **A project with numbered decisions** (`D<n>`) keeps their map frozen in `decisions-archive.md` and their `### D<number> —` sections in the element docs; the map gains no rows{{DIAGRAMS_DRAWIO}}, and diagram decisions continue past its highest number{{/DIAGRAMS_DRAWIO}}.
 - **A rejected alternative stays while it still guards a path** — its recorded failure reason is the guardrail; overturns and removals follow `rule://records` (reconciliation).
 - **New pitfalls** are appended to the catalog of the repo that owns the subject, greppable as `- **P-<n>`, numbered per `rule://records`.
 - Archived plans under `docs/plans/archived/` and, where a project kept them, `archived/` (retired sections) and `decisions-archive.md` (the legacy map) are frozen history.

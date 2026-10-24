@@ -13,6 +13,7 @@ Read [the documentation index](../index.md) for project documents and [the archi
 | Reviewers | Independently check the diff and return verdicts as required by the active runtime's review procedure |
 | registry-scout | Filters standing records by scope; returns identifiers and pointers |
 | context-scout | Briefs a code/doc area with concepts, excerpts, and pointers |
+| stack-operator | Runs approved local-stack acceptance scenarios under the project's procedure |
 | Human | Approves plans, signs off results, owns overrides and hook escape decisions |
 ## Lifecycle
 `draft → approved → executing → review → done / abandoned`
@@ -26,7 +27,7 @@ Read [the documentation index](../index.md) for project documents and [the archi
 | Any status `→ abandoned` | Orchestrator or human; one-line reason | Archive in the home repo; mark and repoint ledger rows |
 ## Work selection
 Read `rule://plan-triage` to choose inline mechanical work, the light path, or a numbered plan.
-The light path is still a loop: in-memory plan → executor → commit → reviewer (base..head) → corrections → re-review → land.
+The light path is still a loop: in-memory plan → executor → commit → reviewer (base..head) → substantive (`S`) repairs → delta-round review → land.
 It omits the plan doc and formal planning approvals; read `rule://plan-triage` for recording and early exits.
 ## Read at the step
 | Need | Read |
@@ -35,6 +36,7 @@ It omits the plan doc and formal planning approvals; read `rule://plan-triage` f
 | Branch, commit, land | `rule://git-flow` |
 | Bound executor work and parallel waves | `rule://dispatch` |
 | Review inputs, verdicts, retries, conflicts | `rule://review-loop` |
+| Local-stack acceptance after task approvals and other Verification, before sign-off | `rule://stack-acceptance` |
 | Verification, Unverified, durable evidence | `rule://verification` |
 | Route knowledge or change governed files | `rule://records` |
 | Find relevant registries or code context | `rule://registries` |

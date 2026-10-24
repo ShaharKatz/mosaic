@@ -18,7 +18,7 @@ Read when: writing a plan's checks, running final verification, or interpreting 
 # Registry lifecycle
 - To evaluate a suspected obligation, route via `rule://records`; close-out applies the approved dispositions in `skill://mosaic-execute`.
 - An obligation is discharged against its literal duty: a run-and-record duty closes when the run happened and its result is recorded, even if that result is a failure; route any defect it exposes per `rule://records` without reopening the discharged duty.
-- G-entries are closed by plans, never deleted; move a fulfilled entry to [gaps-archive.md](../gaps-archive.md), newest first, with `closed by NNNN (<landed hash>)` and how it was solved. Numbers are never reused.
+- G-entries are closed by plans, never deleted; move a fulfilled entry to [gaps-archive.md](../gaps-archive.md), newest first, with {{LANDING_DIRECT}}`closed by NNNN (<landed hash>)`{{/LANDING_DIRECT}}{{LANDING_PULL_REQUEST}}`closed by NNNN (<landing locator>)` (read `rule://git-flow` for the locator and landing evidence){{/LANDING_PULL_REQUEST}} and how it was solved. Numbers are never reused.
 - A pitfall or a legacy decision is retired only by a signed-off audit or the plan that removed its subject: the entry is removed from its catalog or element doc, the sentences that pointed at it are amended in the same change, and git history is the archive; a retired P-number is never reused (numbers are unique across every catalog). An entry in the wrong catalog is moved by the audit's MOVE verdict.
 - For oversized entries and scoped reassessment or a human-consented full audit, read `skill://mosaic-gap-audit`.
 # Local gates

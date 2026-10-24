@@ -16,13 +16,19 @@ Planning runs at maximum effort. Use the configured planning role; if that role 
 3. Read `rule://records`; read `rule://plan-home`; read `rule://git-flow`.
    Reserve the number under `rule://plan-home` R2. This is the row Phase 3 will update.
 4. Read `rule://plan-home`; read `rule://tracker`. Copy the link repo's `docs/plans/TEMPLATE.md` to `<home>/docs/plans/NNNN-<slug>.md`; create its `docs/plans/` directory on first use. Fill today's date, title, number, `status: draft`, target `repo:` list, branch, and `areas:`; handle tracking metadata and binding the plan to intent only as the installed mode requires. Preserve collision evidence and any unsent events under that rule. Use `rule://plan-home` R5/R8 for task paths and prose links.
+{{LANDING_PULL_REQUEST}}
+   Read `rule://stacked-prs`. Fill one `bases` map entry for every branched Git repository (including `link-repo` for cross-repo plans), with the default branch and null `base-pr`, or that repository's parent branch and PR number. No scalar declaration or member copy of the plan.
+{{/LANDING_PULL_REQUEST}}
 5. Read `rule://registries`. Research unfamiliar areas with `context-scout` via `task`, then read the element docs its brief identifies. Send the proposed scope to `registry-scout` via `task` for the pitfall catalogs of every targeted repo and the link, active gaps, and related plans.
    - If the idea trips a flagged pitfall, stop and tell the human.
    - Read `rule://records`. A record the plan intends to produce (a pitfall, an obligation, an element-doc sentence) is stated in Context by content — trap and prevention, trigger and duty, the sentence — with its catalog or doc and no number; the number is allocated at close-out.
    - Express the rule's gap disposition as `closes G-x`, or a G-x-cited deferral in Context.
 6. Read `rule://dispatch`; read `rule://plan-home`; read `rule://records`. Write executor-sized tasks using the dispatch contract and the correct repo/path frame; set `class: docs` for documentation tasks and `class: code` otherwise, with acceptance per class. Documentation tasks still use executors; close-out work is never a task. Before dispatch, verify every source path, heading, and numeric range a task names against the source itself; a task must not ask an executor to infer members that are not there. Include the records rule in `reads:` for governed-file tasks. Delegate research-heavy subparts if useful; author the plan yourself.
 7. Read `rule://review-loop`. Write concrete diff checks in the Review checklist; a check restates the relevant trap as the check itself (what the reviewer greps or runs), never as a P-number. The instructions an executor will run are what the plan proves: test the exact final commands and code, including optional-value guards and the full declared value domain; a sketch that differs from the final instructions is illustrative, never evidence.
-8. Read `rule://verification`. Fill Verification and Unverified from the research under that rule.
+8. Read `rule://verification`; read `rule://stack-acceptance`. Fill Verification, its Stack acceptance and Unverified from the research under those rules.
+{{DIAGRAMS_DRAWIO}}
+9. Read `rule://diagrams`. Fill Architecture delta; the decision predicate requires recorded global decisions and intent before drawing. Use the approved plan as intent without a tracker. End implementation with the diagram task after the records task.
+{{/DIAGRAMS_DRAWIO}}
 
 ## Phase 2 — Adversarial rounds
 1. Read `rule://map`; read `rule://plan-triage`. For a genuinely trivial plan, ask the human to waive the debate; log the granted waiver's author and reason, then go to Phase 3. Without a waiver, run this phase before presenting approval.
@@ -47,5 +53,5 @@ Planning runs at maximum effort. Use the configured planning role; if that role 
 
 ## Phase 3 — Ledger and approval
 1. Read `rule://records`; read `rule://plan-home`.
-   Confirm the reserved master-ledger row's title and status; do not add it twice. For a member-homed plan, seed or update the local ledger using R3's schema.
+   {{LANDING_PULL_REQUEST}}Before approval, confirm the reservation pull request is merged (`gh pr view <n> --json state` must report `MERGED`), re-fetch `{{DEFAULT_BRANCH}}`, and confirm its ledger contains the reserved row. {{/LANDING_PULL_REQUEST}}Confirm the reserved master-ledger row's title and status; do not add it twice. For a member-homed plan, seed or update the local ledger using R3's schema.
 2. Read `rule://human-gates`; read `rule://map`; read `rule://tracker`. Present the plan and a Planning-log summary: rounds, standing rejections, human rulings, and the retained mode-specific collision report with its limitations and unresolved overlaps. Only the human authorizes `draft → approved`; record that authorization before changing status, then follow the installed tracking mode's approval procedure. Do not begin execution in this invocation.
