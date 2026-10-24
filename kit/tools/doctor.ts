@@ -12,7 +12,7 @@ const counts = { FAIL: 0, WARN: 0, "CANNOT-EVALUATE": 0 };
 const reported = new Set<string>();
 const maintenanceChecks: Record<string, true> = {
 	budgets: true, "read-before-mutate": true, "mosaic-config": true, "guard-config": true,
-	"single-home": true, "port-parity": true, symlinks: true, "governed-guard": true, placeholders: true, standards: true,
+	"single-home": true, "port-parity": true, symlinks: true, "governed-guard": true, placeholders: true, standards: true, specialists: true,
 };
 function finding(outcome: Outcome, check: string, file: string, detail: string): void {
 	if (maintenanceChecks[check]) detail = `/mosaic-kit: ${detail}`;
@@ -98,6 +98,8 @@ let repositories: { name: string; path: string; remote: string }[] = [];
 let pullRequestMode = false;
 let diagramsOn = false;
 let diagramsRoot = "";
+type Specialist = { agent: string; paths: string[]; context?: string };
+let specialists: Specialist[] = [];
 if (fs.existsSync(path.join(root, configPath))) {
 	const content = text("mosaic-config", configPath);
 	if (content !== undefined) {
@@ -216,10 +218,65 @@ if (fs.existsSync(path.join(root, configPath))) {
 					|| (config.topology === "monorepo" && config.repositories.length !== 1)) throw new Error("repositories do not match topology");
 				repositories = config.repositories;
 			}
+			if (config.review !== undefined) {
+				const review = config.review;
+				if (!review || !Array.isArray(review.specialists)) throw new Error("review.specialists must be an array");
+				for (const entry of review.specialists) {
+					if (!entry || typeof entry.agent !== "string" || !/^[a-zA-Z0-9][\w-]*$/.test(entry.agent)) throw new Error("invalid specialist agent");
+					if (!Array.isArray(entry.paths) || !entry.paths.length || entry.paths.some((glob: unknown) =>
+						typeof glob !== "string" || !glob.trim() || /[\r\n\0\\()|`]/.test(glob) || glob.includes("\u007b\u007b")
+						|| path.isAbsolute(glob) || glob.split("/").some(part => !part || part === "." || part === ".."))) throw new Error("invalid specialist paths");
+					if (entry.context !== undefined) {
+						if (typeof entry.context !== "string" || !/^[^#]+#[\p{L}\p{N}_-]+$/u.test(entry.context)) throw new Error("invalid specialist context");
+						const [file] = entry.context.split("#");
+						if (path.isAbsolute(file) || /[\\|`\r\n\0]/.test(file) || file.split("/").some((part: string) => !part || part === "." || part === "..")) throw new Error("unsafe specialist context");
+					}
+				}
+				if (review.frontend !== undefined) {
+					const frontend = review.frontend;
+					if (!frontend || typeof frontend !== "object" || Array.isArray(frontend) || Object.keys(frontend).some(key => !["displayName", "collisions"].includes(key))
+						|| !review.specialists.some((entry: Specialist) => entry.agent === "frontend-reviewer")) throw new Error("frontend options require frontend-reviewer and only displayName/collisions");
+					if (frontend.displayName !== undefined && (typeof frontend.displayName !== "string" || !frontend.displayName.trim()
+						|| /[\r\n\0]/.test(frontend.displayName) || frontend.displayName.includes("\u007b\u007b"))) throw new Error("invalid frontend displayName");
+					if (frontend.collisions !== undefined && !["named", "codeowners-and-me"].includes(frontend.collisions)) throw new Error("invalid frontend collisions");
+					if (frontend.collisions === "codeowners-and-me" && (landing.mode !== "pull-request" || landing.host !== "github")) throw new Error("codeowners-and-me requires GitHub pull-request landing");
+				}
+				specialists = review.specialists;
+			}
 			defaultBranch = config.defaultBranch;
 			trackingMode = tracking.mode;
 		} catch (error) {
 			finding("FAIL", "mosaic-config", configPath, String(error));
+		}
+	}
+}
+if (specialists.length) {
+	let anchorsFor: ((markdown: string) => string[]) | undefined;
+	try {
+		const sibling = new URL("./specialists.ts", import.meta.url);
+		const real = fs.realpathSync(sibling);
+		if (path.dirname(real) !== fs.realpathSync(import.meta.dir) || !fs.statSync(real).isFile()) throw new Error("not a contained sibling file");
+		// Load only this doctor's optional sibling, never code from --root.
+		anchorsFor = (await import(real)).headingAnchors;
+		if (typeof anchorsFor !== "function") throw new Error("heading-anchor export missing");
+	} catch {
+		finding("FAIL", "specialists", "tools/specialists.ts", "specialists tool unavailable next to doctor");
+	}
+	for (const entry of specialists) {
+		for (const port of [".omp", ".claude"]) {
+			const file = `${port}/agents/${entry.agent}.md`;
+			try {
+				const real = realpathWithinRoot(root, path.resolve(root, file));
+				if (!real || !fs.statSync(real).isFile()) throw new Error("missing or escaping specialist agent");
+			} catch (error) { finding("FAIL", "specialists", file, String(error)); }
+		}
+		if (entry.context) {
+			try {
+				const [file, anchor] = entry.context.split("#");
+				const real = realpathWithinRoot(root, path.resolve(root, file!));
+				if (!real || !fs.statSync(real).isFile()) throw new Error("missing or escaping specialist context");
+				if (anchorsFor && !anchorsFor(fs.readFileSync(real, "utf8")).includes(anchor!)) throw new Error("missing specialist context section");
+			} catch (error) { finding("FAIL", "specialists", entry.context, String(error)); }
 		}
 	}
 }
@@ -262,14 +319,18 @@ for (const file of ["docs/process/stacked-prs.md", ".omp/rules/stacked-prs.md", 
 if (diagramsOn) processNames.push("diagrams");
 const skillNames = ["mosaic-plan", "mosaic-execute", "mosaic-gap-audit", "mosaic-intake", "mosaic-checkup", "mosaic-kit"];
 if (diagramsOn) skillNames.push("diagrams");
+if (specialists.some(entry => entry.agent === "frontend-reviewer")) skillNames.push("frontend-review");
 const agentPairs = [
 	["executor", "executor"], ["plan-adversary", "plan-adversary"], ["registry-scout", "registry-scout"],
 	["context-scout", "context-scout"], ["claude-reviewer", "reviewer"], ["gpt-reviewer", "reviewer"],
 	["tracker-scout", "tracker-scout"], ["librarian", "librarian"], ["ticket-investigator", "ticket-investigator"],
 	["stack-operator", "stack-operator"],
+] as const;
+const installedAgentPairs: readonly (readonly [string, string])[] = [
+	...agentPairs.filter(([name]) => name !== "tracker-scout" || trackingMode === "local"),
+	...(diagramsOn ? [["diagram-keeper", "diagram-keeper"] as const] : []),
+	...(specialists.some(entry => entry.agent === "frontend-reviewer") ? [["frontend-reviewer", "frontend-reviewer"] as const] : []),
 ];
-const installedAgentPairs = agentPairs.filter(([name]) => name !== "tracker-scout" || trackingMode === "local");
-if (diagramsOn) installedAgentPairs.push(["diagram-keeper", "diagram-keeper"]);
 // Structural contracts belong to the kit, not unrelated project harness entries.
 const processFiles = processNames.map(name => `docs/process/${name}.md`).sort();
 const ompRules = processNames.map(name => `.omp/rules/${name}.md`);
@@ -286,12 +347,14 @@ const harnessFiles = [
 	".claude/hooks/guard-main.sh", ".claude/hooks/lint-ledgers.sh", ".claude/hooks/records-guard.sh",
 ];
 if (fs.existsSync(path.join(root, ".omp/mosaic.json"))) harnessFiles.push(".omp/mosaic.json");
+if (specialists.length) harnessFiles.push("tools/specialists.ts");
 for (const standard of standards) {
 	harnessFiles.push(`.omp/rules/${standard.name}.md`, `.claude/rules/${standard.name}.md`);
 }
 
 // Budgets count physical body lines, including blanks, excluding the final newline.
 const budgets = new Map<string, number>([["AGENTS.md", 30], ["CLAUDE.md", 30], [".claude/rules/mosaic-core.md", 30]]);
+if (specialists.length) budgets.set("tools/specialists.ts", 160);
 for (const file of processFiles) {
 	budgets.set(file, file.endsWith("/mosaic-core.md") ? 30 : file.endsWith("/intake.md") ? 40
 		: file.endsWith("/map.md") ? 60 : 80);
@@ -499,6 +562,7 @@ const portIdioms: [RegExp, string][] = [
 	[/\birc DMs\b/g, "follow-up messages"],
 	[/`claude-reviewer` and `gpt-reviewer`/g, "`reviewer`"],
 	[/\bin parallel with identical inputs\b/g, "with these inputs"],
+	[/skill:\/\/frontend-review/g, ".claude/skills/frontend-review/SKILL.md"],
 ];
 function normalized(content: string): string[] {
 	let shared = body(content).trim();
@@ -617,10 +681,10 @@ function inventory(repo: string, prefix: string): string[] {
 	repositoryFiles.set(prefix, result);
 	return result;
 }
-const rootRepository = standards.length ? repositoryFor(root) : undefined;
+const rootRepository = standards.length || specialists.length ? repositoryFor(root) : undefined;
 const inventoryRepositories = new Map<string, string>(rootRepository ? [["", root]] : []);
 const unavailableRepositories = new Set<string>();
-if (standards.length) for (const member of repositories.filter(repo => repo.path !== ".")) {
+if (standards.length || specialists.length) for (const member of repositories.filter(repo => repo.path !== ".")) {
 	const destination = physicalPath(path.resolve(root, member.path));
 	const repo = repositoryFor(destination);
 	if (repo !== destination) {
@@ -703,6 +767,17 @@ for (const standard of standards) {
 				`git check-ignore failed: ${String(ignored.stderr ?? "").trim() || String(ignored.error ?? ignored.signal)}`);
 		}
 	}
+}
+for (const specialist of specialists) for (const glob of specialist.paths) {
+	try {
+		const pattern = new Bun.Glob(glob);
+		const matched = rootRepository
+			? [...repositoryFiles.values()].some(files => files.some(file => pattern.match(file)))
+			: [...pattern.scanSync({ cwd: root, dot: true, onlyFiles: true, followSymlinks: false })]
+				.some(file => !file.split("/").some(part => part === ".git" || part === "node_modules"));
+		if (!matched) finding(unavailableRepositories.size ? "CANNOT-EVALUATE" : "FAIL", "specialists", configPath,
+			`glob matches no repository file: ${glob}${unavailableRepositories.size ? `; unavailable repositories: ${[...unavailableRepositories].join(", ")}` : ""}`);
+	} catch (error) { finding("FAIL", "specialists", configPath, `invalid dispatch glob ${glob}: ${String(error)}`); }
 }
 // Placeholder ownership is the installed harness's text surface, not the project tree.
 // Exclude project sources (JSX), workflows, Makefiles, fonts/images, and nested checkouts.

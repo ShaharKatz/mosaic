@@ -22,6 +22,9 @@
 | [local tracker inventory](tracker/items.json) | Recorded items, discussion, and managed intent | Following local tracking mode |
 {{/TRACKING_LOCAL}}{{TRACKING_MCP}}| Runtime MCP server `{{MCP_SERVER}}` | Live intent, discussion, and intake through runtime tools | Following MCP tracking mode in the [tracker rule](process/tracker.md) |
 {{/TRACKING_MCP}}| [Maintaining the kit](kit/maintenance.md) | `/mosaic-kit`: recorded adaptations, project harness additions, model roles, upgrades | Explicitly requested kit maintenance only |
+{{FRONTEND_REVIEW}}
+| `/frontend-review`, `frontend-reviewer` | Read-only frontend architecture, reuse, callers and contracts; human-first evidenced result | A pinned diff matches the specialist dispatch table |
+{{/FRONTEND_REVIEW}}
 ## Process rules
 | Rule | Purpose | Read when |
 |---|---|---|

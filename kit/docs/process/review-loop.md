@@ -12,6 +12,18 @@ Read when: a task or parallel wave is ready for review, or a reviewer returns fi
 {{LANDING_PULL_REQUEST}}
 - Once the PR opens, apply `rule://final-review` for code-bearing work and every PR's comments and exact-head CI; route final findings and comment repairs together through this loop.
 {{/LANDING_PULL_REQUEST}}
+{{SPECIALISTS}}
+# Specialist dispatch
+| Agent | Installation-relative changed paths | Project context |
+|---|---|---|
+{{SPECIALIST_ROWS}}
+- Run `bun tools/specialists.ts --repo <path> --base <base sha> --head <head sha>` from the installed root; for a member repo add `--prefix <member path>` relative to that root. Exit 0 prints a JSON agent-name array, deduplicated across matching rows and both rename sides (including deleted paths); dispatch each once in addition to ordinary reviewers. Exit 2 means cannot evaluate: stop dispatch and resolve the reported prerequisite, never treat it as no matches.
+- Give specialists the identical pinned repository/base/head, acceptance criteria and every applicable context section. Keep findings additive and independently attributed; route findings and replies through this correction loop with the same lean-verdict contract.
+- Relay a specialist's visual-check permission question to the human verbatim. Only the human's explicit yes naming the states and expected cost may be quoted in a re-dispatch; never approve on the human's behalf.
+{{LANDING_PULL_REQUEST}}
+- Once the PR opens, route specialist findings and replies through `rule://final-review` for comment rulings and exact-head readiness; send repairs back through this task-review loop. The orchestrator's head-pinned COMMENT review is a final-review comment surface. Keep specialist matching in task and repair review; the separate final engine consumes their attributed, ruled findings without an automatic second full-PR specialist sweep.
+{{/LANDING_PULL_REQUEST}}
+{{/SPECIALISTS}}
 # Verdict and correction
 - Dispatch the independent reviewers required by the active runtime with identical inputs; each must return `APPROVE`.
 - Exception: `class: docs` task waves use one cross-family reviewer per `rule://dispatch`; closure packets still require the full pair.

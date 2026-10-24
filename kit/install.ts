@@ -4,12 +4,16 @@ import { chmod, lstat, mkdir, readFile, readdir, readlink, rm, symlink, writeFil
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import { BUNDLE_FILES, DIAGRAMS_ROOT, DRAWIO_PACKAGE, safeRoot, safeDiagramsRoot, diagramPathKey } from "./tools/constants/diagrams.ts";
+import { realpathWithinRoot } from "./tools/root-containment.ts";
+import { headingAnchors } from "./tools/specialists.ts";
 
 type Member = { name: string; path: string; stack: string; testCommand: string; coverageNote: string };
 type Tracking = { mode: "none" | "local" | "mcp"; mcp?: { server: string; team?: string; queue?: string } };
 type Landing = { mode: "direct"; host?: never; closeOut?: never } | { mode: "pull-request"; host: "github"; closeOut?: "two-commit" };
 type Standard = { name: "excluded-data" | "no-magic-strings" | "shared-first" | "testing" | "pr-evidence"; paths: string[]; dir?: string; designSystem?: string };
 const standardNames = ["excluded-data", "no-magic-strings", "shared-first", "testing", "pr-evidence"];
+type Specialist = { agent: string; paths: string[]; context?: string };
+type Review = { specialists: Specialist[]; frontend?: { displayName?: string; collisions?: "named" | "codeowners-and-me" } };
 type Manifest = {
   project: { name: string; summary: string };
   topology: "multi-repo" | "monorepo";
@@ -21,6 +25,7 @@ type Manifest = {
   members: Member[];
   components: Member[];
   standards?: Standard[];
+  review?: Review;
 };
 type Entry = { kind: "directory"; mode: number } | { kind: "file"; mode: number; content: Buffer }
   | { kind: "symlink"; target: string };
@@ -135,12 +140,42 @@ function manifestFrom(value: unknown): Manifest {
       }
     }
   }
+  let review: Review | undefined;
+  if (value.review !== undefined) {
+    if (!record(value.review) || !Array.isArray(value.review.specialists ?? [])) throw new Error("review.specialists must be an array");
+    const specialists = (value.review.specialists ?? []) as unknown[];
+    for (const entry of specialists) {
+      if (!record(entry) || typeof entry.agent !== "string" || !/^[a-zA-Z0-9][\w-]*$/.test(entry.agent)) throw new Error("specialist agent must be a safe agent name");
+      if (!Array.isArray(entry.paths) || !entry.paths.length) throw new Error("specialist paths must be a nonempty array");
+      for (const glob of entry.paths) {
+        line(glob, "specialist paths");
+        if (isAbsolute(glob) || /[\\()|`]/.test(glob) || glob.split("/").some(part => !part || part === "." || part === "..")) throw new Error("specialist paths must be safe installation-relative globs");
+        new Bun.Glob(glob);
+      }
+      if (entry.context !== undefined) {
+        line(entry.context, "specialist context");
+        if (!/^[^#]+#[\p{L}\p{N}_-]+$/u.test(entry.context) || isAbsolute(entry.context)
+          || entry.context.split("#")[0]!.split("/").some(part => !part || part === "." || part === "..")
+          || /[\\|`]/.test(entry.context)) throw new Error("specialist context must name a project-owned file#section");
+      }
+    }
+    const frontend = value.review.frontend;
+    if (frontend !== undefined) {
+      if (!record(frontend) || Object.keys(frontend).some(key => !["displayName", "collisions"].includes(key))) throw new Error("review.frontend accepts only displayName and collisions");
+      if (!specialists.some(entry => (entry as Specialist).agent === "frontend-reviewer")) throw new Error("review.frontend requires frontend-reviewer selection");
+      if (frontend.displayName !== undefined) line(frontend.displayName, "review.frontend.displayName");
+      if (frontend.collisions !== undefined && !["named", "codeowners-and-me"].includes(frontend.collisions as string)) throw new Error("invalid frontend collisions policy");
+      if (frontend.collisions === "codeowners-and-me" && (landing.mode !== "pull-request" || landing.host !== "github")) throw new Error("codeowners-and-me requires GitHub pull-request landing");
+    }
+    review = { specialists: specialists as Specialist[], ...(frontend !== undefined ? { frontend: frontend as Review["frontend"] } : {}) };
+  }
   return {
     project: value.project as Manifest["project"], topology, git: { defaultBranch }, tracking: tracking as Tracking,
     landing: landing as Landing, diagrams,
     remotes: { link: value.remotes.link, members: remotes as Record<string, string> },
     members: value.members as Member[], components: components as Member[],
     ...(value.standards !== undefined ? { standards: value.standards as Standard[] } : {}),
+    ...(review?.specialists.length ? { review } : {}),
   };
 }
 function memberPath(member: Member): string { return `${member.path.replace(/\/+$/, "")}/`; }
@@ -213,8 +248,10 @@ function render(content: string, file: string, manifest: Manifest): string {
       (_match, body: string) => manifest.diagrams?.mode === "drawio" ? body : "")
     .replace(/\{\{(MULTI_REPO|MONOREPO)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
       (_match, topology: string, body: string) => topology === (manifest.topology === "monorepo" ? "MONOREPO" : "MULTI_REPO") ? body : "")
-    .replace(/^\{\{PR_EVIDENCE\}\}\n([\s\S]*?)^\{\{\/PR_EVIDENCE\}\}\n?/gm,
-      (_match, body: string) => evidenceSelected ? body : "");
+    .replace(/^\{\{(PR_EVIDENCE|SPECIALISTS|FRONTEND_REVIEW)\}\}\n([\s\S]*?)^\{\{\/\1\}\}\n?/gm,
+      (_match, mode: string, body: string) => (mode === "PR_EVIDENCE" ? evidenceSelected
+        : mode === "SPECIALISTS" ? manifest.review?.specialists.length
+        : manifest.review?.specialists.some(entry => entry.agent === "frontend-reviewer")) ? body : "");
   const result = selected.replace(/\{\{([^{}]+)\}\}/g, (_match, token: string) => {
     switch (token) {
       case "PROJECT_NAME": return manifest.project.name;
@@ -229,6 +266,8 @@ function render(content: string, file: string, manifest: Manifest): string {
       case "DIAGRAMS_ROOT": return manifest.diagrams?.root ?? DIAGRAMS_ROOT;
       case "DRAWIO_PACKAGE": return DRAWIO_PACKAGE;
       case "MEMBERS": return membersFor(file, manifest);
+      case "SPECIALIST_ROWS": return manifest.review!.specialists.map(entry =>
+        `| \`${entry.agent}\` | ${entry.paths.map(glob => `\`${cell(glob)}\``).join(", ")} | ${entry.context ? `\`${cell(entry.context)}\`` : "none"} |`).join("\n");
       case "STANDARDS": return manifest.standards?.length
         ? `## Standards\n| Standard | Read when |\n|---|---|\n${manifest.standards.map(entry => `| [${entry.name}](standards/${entry.name}.md) | Editing files matching ${entry.paths.map(glob => `\`${cell(glob)}\``).join(", ")} |`).join("\n")}\n` : "";
       case "STANDARD_PATHS": return standard!.paths.map(glob => `  - ${JSON.stringify(glob)}`).join("\n");
@@ -251,6 +290,8 @@ async function collect(base: string, names: string[], entries: Map<string, Entry
       const standardFile = /^(?:docs\/standards|\.omp\/rules|\.claude\/rules)\/([^/]+)\.md$/.exec(name);
       if (standardFile && standardNames.includes(standardFile[1]!) && !manifest.standards?.some(entry => entry.name === standardFile[1])) continue;
       if (name === "docs/standards" && !manifest.standards?.length) continue;
+      if (/^(?:\.omp|\.claude)\/(?:agents\/frontend-reviewer\.md|skills\/frontend-review(?:\/|$))/.test(name)
+        && !manifest.review?.specialists.some(entry => entry.agent === "frontend-reviewer")) continue;
     }
     const stat = await lstat(file);
     const previous = entries.get(name);
@@ -309,6 +350,29 @@ export async function install(options: { manifest: string; target: string; kit?:
     }
   }
   if (manifest.diagrams?.mode === "drawio" && !safeDiagramsRoot(manifest.diagrams.root)) throw new Error(`diagrams.root is reserved: ${manifest.diagrams.root}`);
+  const specialists = manifest.review?.specialists ?? [];
+  for (const specialist of specialists) {
+    if (specialist.context) {
+      const [file, anchor] = specialist.context.split("#") as [string, string];
+      const projectEntry = overlay ? await existing(join(overlay, file)) : undefined;
+      const contextRoot = projectEntry ? overlay! : target;
+      let real: string | null;
+      try { real = realpathWithinRoot(contextRoot, join(contextRoot, file)); }
+      catch { throw new Error(`Missing specialist context: ${specialist.context}`); }
+      if (!real) throw new Error(`Specialist context escapes project root: ${specialist.context}`);
+      if (!(await lstat(real)).isFile()) throw new Error(`Missing specialist context: ${specialist.context}`);
+      const content = await readFile(real, "utf8");
+      if (!headingAnchors(content).includes(anchor)) throw new Error(`Missing specialist context section: ${specialist.context}`);
+      if (entries.has(file) && !projectEntry) throw new Error(`Specialist context must be project-owned, not a kit replacement: ${file}`);
+    }
+    for (const glob of specialist.paths) {
+      const pattern = new Bun.Glob(glob);
+      const candidates = (await existing(target))?.isDirectory()
+        ? [...pattern.scanSync({ cwd: target, dot: true, onlyFiles: true, followSymlinks: false })] : [];
+      if (overlay) candidates.push(...pattern.scanSync({ cwd: overlay, dot: true, onlyFiles: true, followSymlinks: false }));
+      if (!candidates.some(file => !file.split("/").some(part => part === ".git" || part === "node_modules"))) throw new Error(`Specialist glob matches no project file: ${glob}`);
+    }
+  }
   if (manifest.tracking.mode !== "local") {
     for (const name of entries.keys()) {
       if (name === "tools/tracker.ts" || name === "docs/tracker" || name.startsWith("docs/tracker/")
@@ -319,7 +383,39 @@ export async function install(options: { manifest: string; target: string; kit?:
     const standardFile = /^(?:docs\/standards|\.omp\/rules|\.claude\/rules)\/([^/]+)\.md$/.exec(name);
     if (standardFile && standardNames.includes(standardFile[1]!) && !manifest.standards?.some(entry => entry.name === standardFile[1])) entries.delete(name);
     if (name === "docs/standards" && !manifest.standards?.length) entries.delete(name);
+    if (/^(?:\.omp|\.claude)\/(?:agents\/frontend-reviewer\.md|skills\/frontend-review(?:\/|$))/.test(name)
+      && !specialists.some(entry => entry.agent === "frontend-reviewer")) entries.delete(name);
+    if (name === "tools/specialists.ts" && !specialists.length) entries.delete(name);
   }
+  async function agentFile(file: string, seen = new Set<string>()): Promise<boolean> {
+    if (seen.has(file)) return false;
+    seen.add(file);
+    const destination = join(target, file);
+    if (!contains(target, destination)) return false;
+    const current = overlay && await existing(join(overlay, file)) ? undefined : await existing(destination);
+    if (current) {
+      try {
+        const real = realpathWithinRoot(target, destination);
+        return real !== null && (await lstat(real)).isFile();
+      } catch { return false; }
+    }
+    const entry = entries.get(file);
+    if (entry?.kind === "file") return true;
+    if (entry?.kind !== "symlink") return false;
+    const resolved = resolve(target, dirname(file), entry.target);
+    return contains(target, resolved) && agentFile(relative(target, resolved), seen);
+  }
+  const preservedAgents = new Set<string>();
+  for (const specialist of specialists) for (const port of [".omp", ".claude"]) {
+    const file = `${port}/agents/${specialist.agent}.md`;
+    if (!(await agentFile(file))) throw new Error(`Invalid or unavailable specialist agent in ${port}: ${specialist.agent}`);
+    // An explicit project overlay wins; kit entries never replace project-owned reviewers.
+    if (await existing(join(target, file)) && !(overlay && await existing(join(overlay, file)))) {
+      entries.delete(file);
+      preservedAgents.add(file);
+    }
+  }
+  if (preservedAgents.size) console.log(`Preserving existing specialist agents: ${[...preservedAgents].join(", ")}; upgrade kit-owned twins through the scratch procedure`);
   if (evidenceSelected) {
     const templates: string[] = [];
     let hasDefault = false;
@@ -369,8 +465,9 @@ export async function install(options: { manifest: string; target: string; kit?:
     }
     config.content = Buffer.from(`${JSON.stringify({
       defaultBranch: manifest.git.defaultBranch, topology: manifest.topology, tracking: manifest.tracking, landing: manifest.landing, kit: { commit },
+      ...(specialists.length ? { review: manifest.review } : {}),
       ...(manifest.standards?.length ? { standards: manifest.standards } : {}),
-      ...(manifest.landing.mode === "pull-request" || manifest.standards?.length ? { repositories: [
+      ...(manifest.landing.mode === "pull-request" || manifest.standards?.length || specialists.length ? { repositories: [
         { name: "link-repo", path: ".", remote: manifest.remotes.link },
         ...(manifest.topology === "multi-repo" ? manifest.members.map(member => ({ name: member.name, path: member.path.replace(/\/+$/, ""), remote: manifest.remotes.members[member.name] })) : []),
       ] } : {}),

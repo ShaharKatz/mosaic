@@ -112,6 +112,34 @@ docs-only and inline exemptions, still requires comment rulings and passing exac
 Direct landing does not install this rule or its callers; no additional manifest field is needed.
 
 
+### Path-selected review specialists
+
+Survey whether the project actually has a frontend, its changed-path scope and an existing
+project-owned review context section; never invent a frontend or replace project reviewers.
+Optional `review.specialists: [{ agent, paths, context? }]` defaults to empty. Each agent must
+exist in both runtimes (kit or project); paths are safe installation-root-relative globs,
+including member prefixes for multi-repo projects. Every glob must match a project file.
+Optional context is an existing project-owned `file#section` reference; preserve that section
+in scratch with a project overlay when reproducing an install.
+
+Selecting `frontend-reviewer` installs its skill/agent twins and dispatch/navigation lines.
+Optional `review.frontend` accepts only `displayName` (default `Frontend review`) and
+`collisions` (`named`, the default, or GitHub pull-request-only `codeowners-and-me`).
+Design-system configuration has one home: `standards[].designSystem` on `shared-first`.
+The specialist compares the installed version by default and stays code-only unless the human
+approves browser checks/pictures for that review, with named states and expected cost.
+Specialists receive the ordinary reviewers' pinned repo/base/head and add findings; they never
+edit or publish. In direct mode results stay in-session; in GitHub pull-request mode the
+orchestrator posts a head-pinned COMMENT review. Selected settings are recorded in `.omp/mosaic.json`.
+Empty/omitted selection installs no optional twins, navigation or review metadata.
+Nonempty selection also installs `tools/specialists.ts`; run its pinned three-dot diff command
+from the review-loop rule to obtain a deduplicated JSON agent list (exit 0), or an explicit cannot-evaluate
+error (exit 2, no stdout). Context anchors follow GitHub section-link rules, including duplicate
+heading suffixes and separate space-derived hyphens.
+Project-owned context files may be in-root symlinks. Existing specialist agents are preserved and
+reported, even under `--force`; explicit project overlay entries take precedence. Upgrade kit-owned
+twins through the scratch procedure, not by overwriting project reviewers.
+
 ## Reference
 
 ### Topology and default branch

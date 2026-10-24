@@ -24,6 +24,9 @@ Read `rule://plan-home` R5 for path relativity and per-task `repo:`; tasks use t
 - For `class: docs`, `acceptance:` is ledger lint, `bun tools/doctor.ts`, and `bun tools/checkup.ts`, plus a source citation (archive or code path) on every new statement. Whole-tree gates follow the join rule below.
 - A `docs` task wave gets exactly one reviewer cross-family to the executor's resolved `@templated` model: GPT → `claude-reviewer`; Claude → `gpt-reviewer`. Resolve the role from the project's model settings, not the agent's name. Group review waves by class.
 - `code` task waves and every closure packet require both `claude-reviewer` and `gpt-reviewer`, independently, in parallel. In Claude Code, use its `reviewer` body for each reviewer role with the corresponding model; unavailable models follow `rule://review-loop`, never a silent single-reviewer closure.
+{{SPECIALISTS}}
+- Path-selected specialists add to the ordinary review roles; select and deduplicate them using the dispatch table in `rule://review-loop`, with the identical pinned repository/base/head and project context.
+{{/SPECIALISTS}}
 # Dispatch
 - Parallelize only when resolved `files:` sets are disjoint; overlap runs sequentially. Per-task acceptance may not depend on a sibling's output still in flight: whole-tree gates (doctor, checkup, link checks) run once after the wave joins, not inside each parallel task. Files in different repos are distinct even when repo-relative strings match.
 - Executors sharing a worktree never run commands that change its environment (dependency sync/install or toolchain switches; for example, `npm ci`, `npm install`, or `pip install`): a sibling task can lose tools mid-run. Use no-sync execution where supported and report a missing tool instead of installing it.

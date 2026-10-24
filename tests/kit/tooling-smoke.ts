@@ -20,6 +20,240 @@ function run(command: string[], code: number): string {
 }
 const bun = process.execPath;
 const manifest = join(scratch, "manifest.json");
+async function exerciseSpecialistRepairs(input: Record<string, unknown>): Promise<void> {
+	const failures: string[] = [];
+	const scenario = async (name: string, check: () => Promise<void>) => {
+		try { await check(); console.log(`PASS specialist repair ${name}`); }
+		catch (error) { failures.push(`${name}: ${String(error)}`); console.log(`FAIL specialist repair ${name}: ${String(error)}`); }
+	};
+	const settings = (agent = "frontend-reviewer", context = "review-context.md#frontend") => ({
+		...input, tracking: { mode: "none" }, landing: { mode: "direct" }, review: { specialists: [{ agent, paths: ["surface/**"], context }] },
+	});
+	const putAt = (root: string, file: string, content: string) => {
+		mkdirSync(dirname(join(root, file)), { recursive: true }); writeFileSync(join(root, file), content);
+	};
+	for (const kind of ["directory", "external-symlink", "filtered-agent"]) await scenario(`S2-${kind}`, async () => {
+		const fresh = join(scratch, `repair-${kind}`), overlay = join(scratch, `overlay-${kind}`);
+		putAt(fresh, "surface/view.html", "<p>Error</p>\n"); putAt(fresh, "review-context.md", "## Frontend\n");
+		mkdirSync(overlay);
+		putAt(scratch, "external-agent.md", "External reviewer.\n");
+		if (kind !== "filtered-agent") for (const port of [".omp", ".claude"]) {
+			const file = join(overlay, `${port}/agents/project-reviewer.md`); mkdirSync(dirname(file), { recursive: true });
+			if (kind === "directory") mkdirSync(file); else symlinkSync(join(scratch, "external-agent.md"), file);
+		}
+		writeFileSync(manifest, JSON.stringify(settings(kind === "filtered-agent" ? "tracker-scout" : "project-reviewer")));
+		await rejects(install({ manifest, target: fresh, overlay }), /agent/);
+		ok(!existsSync(join(fresh, ".omp/mosaic.json")), "rejected agent writes no runtime metadata");
+	});
+	await scenario("S3-overlay-nonexistent-target", async () => {
+		const fresh = join(scratch, "repair-greenfield"), overlay = join(scratch, "overlay-greenfield");
+		putAt(overlay, "surface/view.html", "<p>Error</p>\n"); putAt(overlay, "review-context.md", "## Frontend\n");
+		writeFileSync(manifest, JSON.stringify(settings()));
+		ok(!existsSync(fresh));
+		await install({ manifest, target: fresh, overlay });
+		const result = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		strictEqual(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
+		strictEqual(result.stdout.toString(), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+	});
+	for (const anchor of ["frontend-1", "frontend--client", "frontend-client"]) await scenario(`S4-${anchor}`, async () => {
+		const fresh = join(scratch, `repair-anchor-${anchor}`);
+		putAt(fresh, "surface/view.html", "<p>Error</p>\n");
+		putAt(fresh, "review-context.md", "## Frontend\nFirst.\n## Frontend\nSecond.\n## Frontend & client\nCombined.\n");
+		writeFileSync(manifest, JSON.stringify(settings("frontend-reviewer", `review-context.md#${anchor}`)));
+		if (anchor === "frontend-client") await rejects(install({ manifest, target: fresh }), /context section/);
+		else await install({ manifest, target: fresh });
+		// Check doctor independently, even for the anchor rejected by the installer.
+		if (anchor === "frontend-client") {
+			writeFileSync(manifest, JSON.stringify(settings())); await install({ manifest, target: fresh });
+			const metadata = JSON.parse(readFileSync(join(fresh, ".omp/mosaic.json"), "utf8"));
+			metadata.review.specialists[0].context = `review-context.md#${anchor}`;
+			putAt(fresh, ".omp/mosaic.json", JSON.stringify(metadata));
+		}
+		const result = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		strictEqual(result.exitCode, anchor === "frontend-client" ? 1 : 0, `${result.stdout}\n${result.stderr}`);
+	});
+	for (const fromOverlay of [false, true]) await scenario(`context-symlink-${fromOverlay ? "overlay" : "target"}`, async () => {
+		const fresh = join(scratch, `context-link-${fromOverlay}`), overlay = join(scratch, `context-overlay-${fromOverlay}`);
+		const source = fromOverlay ? overlay : fresh;
+		putAt(source, "surface/view.html", "<p>Ready</p>\n"); putAt(source, "docs/context.md", "## Frontend\n");
+		symlinkSync("docs/context.md", join(source, "review-context.md"));
+		writeFileSync(manifest, JSON.stringify(settings()));
+		await install({ manifest, target: fresh, ...(fromOverlay ? { overlay } : {}) });
+		const result = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		strictEqual(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
+	});
+	await scenario("preserved-agent-report", async () => {
+		const fresh = join(scratch, "preserved-agent-report");
+		putAt(fresh, "surface/view.html", "<p>Ready</p>\n"); putAt(fresh, "review-context.md", "## Frontend\n");
+		const paths = [".omp", ".claude"].map(port => `${port}/agents/frontend-reviewer.md`);
+		for (const file of paths) putAt(fresh, file, "# Project-owned reviewer\n");
+		writeFileSync(manifest, JSON.stringify(settings())); await install({ manifest, target: fresh });
+		const result = Bun.spawnSync([bun, join(import.meta.dir, "../../kit/install.ts"), "--manifest", manifest, "--target", fresh, "--force"],
+			{ stdout: "pipe", stderr: "pipe" });
+		strictEqual(result.exitCode, 0, result.stderr.toString());
+		for (const file of paths) {
+			strictEqual(readFileSync(join(fresh, file), "utf8"), "# Project-owned reviewer\n");
+			ok(result.stdout.toString().includes(file), `preservation report names ${file}`);
+		}
+	});
+	await scenario("overlay-agent-precedence", async () => {
+		const fresh = join(scratch, "overlay-agent-target"), overlay = join(scratch, "overlay-agent-source");
+		putAt(fresh, "surface/view.html", "<p>Ready</p>\n"); putAt(fresh, "review-context.md", "## Frontend\n");
+		for (const port of [".omp", ".claude"]) {
+			putAt(fresh, `${port}/agents/frontend-reviewer.md`, "# Project-owned reviewer\n");
+			putAt(overlay, `${port}/agents/frontend-reviewer.md`, "# Updated project reviewer\n");
+		}
+		writeFileSync(manifest, JSON.stringify(settings()));
+		await install({ manifest, target: fresh, overlay, force: true });
+		for (const port of [".omp", ".claude"]) strictEqual(readFileSync(join(fresh, `${port}/agents/frontend-reviewer.md`), "utf8"), "# Updated project reviewer\n");
+	});
+	await scenario("doctor-independent-drift", async () => {
+		const fresh = join(scratch, "doctor-independent-drift");
+		putAt(fresh, "surface/view.html", "<p>Ready</p>\n"); putAt(fresh, "review-context.md", "## Frontend\n");
+		writeFileSync(manifest, JSON.stringify({ ...settings(), tracking: { mode: "local" }, landing: { mode: "pull-request", host: "github" } }));
+		await install({ manifest, target: fresh });
+		for (const file of [".omp/agents/frontend-reviewer.md", ".omp/agents/tracker-scout.md", "docs/process/final-review.md"]) rmSync(join(fresh, file));
+		putAt(fresh, "review-context.md", "## Renamed\n");
+		const metadata = JSON.parse(readFileSync(join(fresh, ".omp/mosaic.json"), "utf8"));
+		metadata.review.specialists[0].paths = ["missing/**"]; putAt(fresh, ".omp/mosaic.json", JSON.stringify(metadata));
+		const result = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		strictEqual(result.exitCode, 2, `${result.stdout}\n${result.stderr}`);
+		const output = result.stdout.toString();
+		for (const problem of [".omp/agents/frontend-reviewer.md", "review-context.md#frontend", "missing/**", ".omp/agents/tracker-scout.md", "docs/process/final-review.md"]) {
+			ok(output.includes(problem), `doctor reports independent drift: ${problem}\n${output}`);
+		}
+		ok(output.includes("FAIL specialists "));
+		ok(!output.includes("FAIL mosaic-config "));
+	});
+	await scenario("S1-installed-git-dispatch", async () => {
+		const fresh = join(scratch, "repair-dispatch");
+		putAt(fresh, "surface/view.html", "<p>Error</p>\n"); putAt(fresh, "review-context.md", "## Frontend\n");
+		writeFileSync(manifest, JSON.stringify({ ...settings(), review: { specialists: [
+			...settings().review.specialists, { agent: "frontend-reviewer", paths: ["surface/*.html"] },
+		] } }));
+		await install({ manifest, target: fresh });
+		const git = (repo: string, args: string[], stdin?: string) => {
+			const result = Bun.spawnSync(["git", ...args], { cwd: repo, stdin: stdin === undefined ? undefined : Buffer.from(stdin),
+				stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_AUTHOR_NAME: "Smoke", GIT_AUTHOR_EMAIL: "smoke@example.invalid",
+					GIT_COMMITTER_NAME: "Smoke", GIT_COMMITTER_EMAIL: "smoke@example.invalid" } });
+			strictEqual(result.exitCode, 0, result.stderr.toString()); return result.stdout.toString().trim();
+		};
+		const commit = (repo: string, files: Record<string, string>, parent?: string) => {
+			const tree = (prefix: string): string => {
+				const children = new Set(Object.keys(files).filter(file => file.startsWith(prefix)).map(file => file.slice(prefix.length).split("/")[0]!));
+				return git(repo, ["mktree"], [...children].sort().map(name => {
+					const file = `${prefix}${name}`;
+					return files[file] !== undefined ? `100644 blob ${git(repo, ["hash-object", "-w", "--stdin"], files[file])}\t${name}\n`
+						: `040000 tree ${tree(`${file}/`)}\t${name}\n`;
+				}).join(""));
+			};
+			return git(repo, ["commit-tree", tree(""), ...(parent ? ["-p", parent] : []), "-m", "review snapshot"]);
+		};
+		git(fresh, ["init", "-b", "main"]);
+		for (const [name, before, after, expected] of [
+			["add", {}, { "surface/added with space.html": "added\n" }, ["frontend-reviewer"]],
+			["modify", { "surface/item.html": "before\n" }, { "surface/item.html": "after\n" }, ["frontend-reviewer"]],
+			["delete", { "surface/deleted with space.html": "deleted\n" }, {}, ["frontend-reviewer"]],
+			["rename-out", { "surface/old.html": "stable outside\n" }, { "elsewhere/new.html": "stable outside\n" }, ["frontend-reviewer"]],
+			["rename-in", { "elsewhere/old.html": "stable inside\n" }, { "surface/new.html": "stable inside\n" }, ["frontend-reviewer"]],
+			["no-match", {}, { "elsewhere/item": "unrelated\n" }, []],
+		] as const) {
+			const base = commit(fresh, before), head = commit(fresh, after, base);
+			const result = Bun.spawnSync([bun, "tools/specialists.ts", "--repo", fresh, "--base", base, "--head", head], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+			strictEqual(result.exitCode, 0, `${name}: ${result.stderr}`);
+			deepStrictEqual(JSON.parse(result.stdout.toString()), expected, name);
+		}
+		const ancestor = commit(fresh, { "surface/item.html": "before\n", "elsewhere/item": "before\n" });
+		const advancedBase = commit(fresh, { "surface/item.html": "shared change\n", "elsewhere/item": "before\n" }, ancestor);
+		for (const [name, surface, expected] of [
+			["base-only-change", "before\n", []],
+			["change-under-review", "shared change\n", ["frontend-reviewer"]],
+		] as const) await scenario(`S1-diverged-${name}`, async () => {
+			const head = commit(fresh, { "surface/item.html": surface, "elsewhere/item": "branch change\n" }, ancestor);
+			const result = Bun.spawnSync([bun, "tools/specialists.ts", "--repo", fresh, "--base", advancedBase, "--head", head], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+			strictEqual(result.exitCode, 0, result.stderr.toString()); deepStrictEqual(JSON.parse(result.stdout.toString()), expected);
+		});
+		const member = join(fresh, "group/member"); mkdirSync(member, { recursive: true }); git(member, ["init", "-b", "main"]);
+		const metadata = JSON.parse(readFileSync(join(fresh, ".omp/mosaic.json"), "utf8"));
+		metadata.review.specialists = [{ agent: "frontend-reviewer", paths: ["group/member/surface/**"] }];
+		putAt(fresh, ".omp/mosaic.json", JSON.stringify(metadata));
+		const base = commit(member, {}), head = commit(member, { "surface/view.html": "member\n" }, base);
+		const result = Bun.spawnSync([bun, "tools/specialists.ts", "--repo", member, "--base", base, "--head", head, "--prefix", "group/member"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		strictEqual(result.exitCode, 0, result.stderr.toString()); deepStrictEqual(JSON.parse(result.stdout.toString()), ["frontend-reviewer"]);
+		const invalid = Bun.spawnSync([bun, "tools/specialists.ts", "--repo", member, "--base", "unavailable", "--head", head], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		strictEqual(invalid.exitCode, 2); strictEqual(invalid.stdout.toString(), "");
+		rmSync(join(fresh, "tools/specialists.ts"));
+		const missing = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		ok([1, 2].includes(missing.exitCode!), `${missing.stdout}\n${missing.stderr}`);
+		ok(missing.stdout.toString().includes("specialists tool unavailable next to doctor"));
+	});
+	deepStrictEqual(failures, []);
+}
+async function exerciseSpecialists(input: Record<string, unknown>): Promise<void> {
+	for (const topology of ["monorepo", "multi-repo"]) for (const mode of ["direct", "pull-request"]) for (const enabled of [false, true]) {
+		const fresh = join(scratch, `specialists-${topology}-${mode}-${enabled}`);
+		const prefix = topology === "multi-repo" ? "group/member/" : "";
+		const putFresh = (file: string, content: string) => {
+			mkdirSync(dirname(join(fresh, file)), { recursive: true });
+			writeFileSync(join(fresh, file), content);
+		};
+		putFresh(`${prefix}surface/view.html`, "<section>Error: unable to load</section>\n");
+		putFresh("review-context.md", "# Project review\n## Frontend\nRead shared components and preserve error recovery.\n");
+		const settings = {
+			...input, topology, tracking: { mode: "none" }, landing: mode === "direct" ? { mode } : { mode, host: "github" },
+			members: topology === "multi-repo" ? [{ name: "member", path: "group/member", stack: "project-defined", testCommand: "true", coverageNote: "" }] : [],
+			remotes: { link: "https://example.invalid/root.git", members: { member: "https://example.invalid/member.git" } },
+			review: { specialists: enabled ? [{ agent: "frontend-reviewer", paths: [`${prefix}surface/**`], context: "review-context.md#frontend" }] : [],
+				...(enabled ? { frontend: { displayName: "Interface review", collisions: mode === "pull-request" ? "codeowners-and-me" : "named" } } : {}) },
+		};
+		writeFileSync(manifest, JSON.stringify(settings));
+		await install({ manifest, target: fresh });
+		for (const directory of topology === "multi-repo" ? [fresh, join(fresh, "group/member")] : [fresh]) {
+			const init = Bun.spawnSync(["git", "init", "-b", "main"], { cwd: directory, stdout: "pipe", stderr: "pipe" });
+			strictEqual(init.exitCode, 0, init.stderr.toString());
+		}
+		if (topology === "multi-repo") putFresh(".gitignore", "/group/\n");
+		for (const port of [".omp", ".claude"]) {
+			strictEqual(existsSync(join(fresh, `${port}/agents/frontend-reviewer.md`)), enabled);
+			strictEqual(existsSync(join(fresh, `${port}/skills/frontend-review/SKILL.md`)), enabled);
+		}
+		const metadata = JSON.parse(readFileSync(join(fresh, ".omp/mosaic.json"), "utf8"));
+		strictEqual(Object.hasOwn(metadata, "review"), enabled);
+		const doctor = () => Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		const valid = doctor();
+		strictEqual(valid.exitCode, 0, `${valid.stdout}\n${valid.stderr}`);
+		strictEqual(valid.stdout.toString(), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+		console.log(`PASS specialists ${enabled ? "enabled" : "disabled"}/${mode}/${topology}: doctor 0/0/0`);
+		if (!enabled) continue;
+		for (const patch of [
+			{ specialists: [{ agent: "unknown-reviewer", paths: [`${prefix}surface/**`] }] },
+			{ specialists: [{ agent: "frontend-reviewer", paths: [`${prefix}surface/**`], context: "review-context.md#missing" }] },
+			{ specialists: [{ agent: "frontend-reviewer", paths: [`${prefix}surface/**`], context: "missing-context.md#frontend" }] },
+			{ specialists: [{ agent: "frontend-reviewer", paths: ["../escape/**"] }] },
+			{ specialists: [{ agent: "frontend-reviewer", paths: ["absent/**"] }] },
+			{ specialists: settings.review.specialists, frontend: { designSystem: "duplicate" } },
+			...(mode === "direct" ? [{ specialists: settings.review.specialists, frontend: { collisions: "codeowners-and-me" } }] : []),
+		]) {
+			writeFileSync(manifest, JSON.stringify({ ...settings, review: patch }));
+			await rejects(install({ manifest, target: fresh, force: true }), /agent|context|paths|glob|frontend|GitHub/);
+			putFresh(".omp/mosaic.json", JSON.stringify({ ...metadata, review: patch }));
+			const invalid = doctor();
+			strictEqual(invalid.exitCode, 1, `${invalid.stdout}\n${invalid.stderr}`);
+			ok(invalid.stdout.toString().includes("FAIL "));
+			putFresh(".omp/mosaic.json", JSON.stringify(metadata));
+		}
+		const custom = { agent: "project-reviewer", paths: [`${prefix}surface/**`] };
+		for (const port of [".omp", ".claude"]) putFresh(`${port}/agents/project-reviewer.md`, `Project-owned ${port} reviewer.\n`);
+		writeFileSync(manifest, JSON.stringify({ ...settings, review: { specialists: [custom] } }));
+		await install({ manifest, target: fresh, force: true });
+		for (const port of [".omp", ".claude"]) strictEqual(readFileSync(join(fresh, `${port}/agents/project-reviewer.md`), "utf8"), `Project-owned ${port} reviewer.\n`);
+		strictEqual(doctor().exitCode, 0);
+		rmSync(join(fresh, ".claude/agents/project-reviewer.md"));
+		await rejects(install({ manifest, target: fresh, force: true }), /agent/);
+		strictEqual(doctor().exitCode, 1);
+	}
+	console.log("PASS specialist rejection: unknown agent, missing section, unsafe/unmatched glob, duplicate design-system option and incompatible collision mode");
+}
 async function exerciseBraceScope(input: Record<string, unknown>): Promise<void> {
 	const fresh = join(scratch, "brace-scope");
 	const glob = "src/**/*.{ts,tsx}";
@@ -797,6 +1031,8 @@ try {
 	await install({ manifest, target });
 	const input = JSON.parse(readFileSync(manifest, "utf8"));
 	await exerciseStackAcceptance(input);
+	await exerciseSpecialistRepairs(input);
+	await exerciseSpecialists(input);
 	await exerciseBraceScope(input);
 	await exerciseFinalReviewRegressions(input);
 	await exerciseStandards(input);
