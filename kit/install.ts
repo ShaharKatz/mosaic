@@ -263,6 +263,10 @@ export async function install(options: { manifest: string; target: string; kit?:
   await collect(source, roots.filter(name => sourceNames.includes(name)), entries, manifest);
   // Overlays remain complete replacements, but cannot enable files excluded by the selected mode.
   if (overlay) await collect(overlay, (await readdir(overlay)).sort(), entries);
+  if (manifest.landing.mode !== "pull-request") {
+    entries.delete("docs/process/final-review.md");
+    entries.delete(".omp/rules/final-review.md");
+  }
   if (manifest.tracking.mode !== "local") {
     for (const name of entries.keys()) {
       if (name === "tools/tracker.ts" || name === "docs/tracker" || name.startsWith("docs/tracker/")

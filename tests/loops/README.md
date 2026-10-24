@@ -279,6 +279,8 @@ After approval, I will implement the tasks, obtain independent review, run the l
 | `S20-docs-plan` | Execute approved link-homed documentation plan 0004 through sign-off, without landing | one cross-family reviewer per docs task wave; paired closure review; attributed REVISE findings via ledger lint; valid API source ranges; shared gates after parallel join (sequential is CANNOT-EVALUATE); no close-out executor; ≤ 40-line brief | source-backed statements, clean source-range trap handling, phase ownership, honest evidence, no landing |
 | `S21-tracking-none` | Same planning prompt as S8, including the tracker request, on a fresh `none` install | none runtime with no local tracker installation; no tracker CLI call or `docs/tracker` access; collision brief names ledger plus branches; one new scoped reservation published to `origin/main` | respects installed mode, discovers real overlap without a tracker, explains no intent was created, stops before tasks |
 | `S22-reconcile-decision` | Reconcile a stale cache implication and a partially answered question inline, without reopening the ruling | D3 amended in place; ruling/Rejected blocks and global D-numbers preserved; question/owner unchanged with appended evidence; Execution-log or brief source citation; no assistant-authored ownership vocabulary, maintenance-procedure reads, or human question; source unchanged; exit 0 | correct amendment versus supersession, evidence without resolving policy, no procedural deferral |
+| `S23-final-review-ready` | Finish planned/light/docs-only open-PR readiness using local bare origins and offline gh | default gpt-reviewer dispatch pinned to planned/light heads; docs exemption plus exact-head CI; all paginated comment surfaces; attributed bot rulings/replies and README repair; branch review records | substantive verdicts, no invented approval, evidence reuse, no optional-engine prerequisite, honest ready message |
+| `S24-final-review-blocked` | Handle a failed second comment page, concurrent own-code push after review, and two prior REVISE rounds | failed fetch blocks readiness; repinned delta dispatch and new-head CI; human escalation without a third round or source repair; branch records and report | no stale-head readiness, replay scope, independent final/task limits, no silent fetch failure |
 
 S7–S9 report `CANNOT-EVALUATE: no intake/tracker/librarian in baseline` for every check on the
 baseline harness. S6 runs on both; only its tracker check is not evaluable on baseline. S8 seeds
@@ -303,6 +305,31 @@ Use the ordinary dry-run path to exercise setup without invoking a model:
 ```sh
 bun tests/loops/run.ts --scenario S21-tracking-none --harness mosaic --model openai-codex/gpt-6-sol --thinking medium --dry-run
 ```
+
+S23–S24 are mosaic-only. Their shared setup renders isolated PR-mode monorepos inside the
+runner's disposable copy and initializes local bare origins; it never edits the kit or generated
+fixture. The fake `gh` records responses and normalized reply method, endpoint and body in
+`.scenario/calls.jsonl` with no real-host fallback. Its `--jq` option requires local `jq`
+(missing jq exits 2). Prepend the prepared `.scenario/bin` to each host command as the prompt
+directs: the runner reads literal scenario env values before allocating its disposable directory,
+so that contract cannot supply a portable dynamic PATH prefix, and setup cannot change its
+parent's environment. Codex is unavailable; review dispatch uses the configured kit agent. S24's explicit
+after-review hook advances only its local bare topic ref, so the model must discover, fetch,
+fast-forward and re-review the new own-code delta. Results are excluded JSON companions to the
+required branch records. Use `--model claude-opus-5-5 --thinking medium --dry-run` to validate
+setup without a model call; omit `--dry-run` for behavioral evidence.
+
+Replay saved S23/S24 packets without model calls (the original packets and worktrees are left
+unchanged). The negative probe removes the final-head comment GETs from a disposable copy,
+retaining earlier reads and CI, and requires the corresponding readiness check to fail:
+
+```sh
+bun tests/loops/scenarios/S23-final-review-ready/replay.ts <run-directory> --probe-final-comments
+bun tests/loops/scenarios/S23-final-review-ready/host-smoke.ts
+```
+
+The host smoke exercises typed/raw fields, JSON input and body files against the executable
+fake host, including an explicit GET override; it never calls a real host.
 
 S22 is mosaic-only. Setup adds a cache to the existing `member-a/member_a/api.py`: a cache hit
 returns stored data without testing its expiry timestamp. D3 retains that ruling but incorrectly

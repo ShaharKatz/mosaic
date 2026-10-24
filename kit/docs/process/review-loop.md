@@ -6,6 +6,9 @@ Read when: a task or parallel wave is ready for review, or a reviewer returns fi
 - Give each reviewer the plan path (or in-memory task for the light path), target repo paths, branch name and its `<base sha>`, and tasks under review; include the Review checklist and the pitfall catalogs of every touched repo and the link ([pitfalls.md](../architecture/pitfalls.md){{MULTI_REPO}}, `<member>/docs/pitfalls.md`{{/MULTI_REPO}}). `<base sha>` is the sha of the fetched base ref named in the dispatch (`{{DEFAULT_BRANCH}}`'s unless the dispatch says otherwise); pin the sha, never the ref name, which can move during review.
 - Commit the work under review first: `git diff <base sha>...<branch>` excludes uncommitted edits, so an uncommitted task shows the reviewer an empty diff. Then review `git -C <repo> diff <base sha>...<branch>` separately in each repo, including untracked additions (`git status --porcelain`); what lands must be the reviewed snapshot.
 - Read `rule://registries` for challenger reading and [targeted-tests](targeted-tests.md) (loaded automatically inside executor and reviewer agents; the main session reads the file) for review-time checks.
+{{LANDING_PULL_REQUEST}}
+- Once the PR opens, apply `rule://final-review` for code-bearing work and every PR's comments and exact-head CI; route final findings and comment repairs together through this loop.
+{{/LANDING_PULL_REQUEST}}
 # Verdict and correction
 - Dispatch the independent reviewers required by the active runtime with identical inputs; each must return `APPROVE`.
 - Exception: `class: docs` task waves use one cross-family reviewer per `rule://dispatch`; closure packets still require the full pair.
@@ -20,7 +23,7 @@ Read when: a task or parallel wave is ready for review, or a reviewer returns fi
 - Later rounds list every ruled finding as not to be re-raised without new evidence; a finding whose fix would undo a deliberate earlier change goes to the human.
 - Conflicting reviewers → the orchestrator rules and records the ruling in the Execution log; do not silently choose the easier verdict. A recorded ruling does not replace the required final `APPROVE` verdicts: send the ruling and changed snapshot back to every required reviewer for a verdict; only a specific human override waives a standing `REVISE`, and a general sign-off pre-approval is not that override.
 - A close-out with missing or unsupported dispositions is `REVISE`; read `rule://records` to check routing. The closure wave reviews only what changed since the last approval: the disposition list with its evidence, the document-alignment diff, and any inline correction; already-approved task diffs are not re-reviewed, and the dispatch says so. Rerun retained verification only when the packet changed what it exercises.
-- A reviewer-clean light-path change can land immediately; formal plans retain the human sign-off in `rule://map`. Inline mechanical work follows `rule://plan-triage` without this review dispatch.
+- A reviewer-clean light-path change can land {{LANDING_DIRECT}}immediately{{/LANDING_DIRECT}}{{LANDING_PULL_REQUEST}}after `rule://final-review` passes (or records its exemption), including comments and CI{{/LANDING_PULL_REQUEST}}; formal plans retain the human sign-off in `rule://map`. Inline mechanical work follows `rule://plan-triage` without this review dispatch.
 # Model availability
 Prefer cross-family refutation when models are available; semantic role aliases choose models without changing agent bodies.
 On a usage-limit error, switch the affected role to the available family and temporarily suspend cross-family work; record the limitation. The required role verdicts still apply.

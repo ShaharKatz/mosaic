@@ -408,6 +408,96 @@ function exerciseCloseOut(flow: string): void {
 	ok(git("show", "-s", "--format=%b", commits[0]).includes("0001-T1: implement\n0001-T2: finish"));
 	console.log("PASS executable close-out: upstream merge, rebase, rendered autosquash; two commits, corrected code first, terminal-only close-out last");
 }
+function exerciseReplay(rule: string): void {
+	const repo = join(scratch, "replay-history");
+	mkdirSync(repo);
+	const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+		GIT_AUTHOR_NAME: "Smoke", GIT_AUTHOR_EMAIL: "smoke@example.invalid",
+		GIT_COMMITTER_NAME: "Smoke", GIT_COMMITTER_EMAIL: "smoke@example.invalid" };
+	const invoke = (command: string[]) => Bun.spawnSync(command, { cwd: repo, env, stdout: "pipe", stderr: "pipe" });
+	const git = (...args: string[]) => {
+		const result = invoke(["git", ...args]);
+		strictEqual(result.exitCode, 0, `${args.join(" ")}\n${result.stdout}\n${result.stderr}`);
+		return result.stdout.toString().trim();
+	};
+	const commit = (file: string, content: string, message: string) => {
+		mkdirSync(dirname(join(repo, file)), { recursive: true });
+		writeFileSync(join(repo, file), content);
+		git("add", "."); git("commit", "-m", message);
+		return git("rev-parse", "HEAD");
+	};
+	const commands = [...rule.matchAll(/`(git [^`]+)`/g)].map(match => match[1]);
+	const recipe = (prefix: string, values: Record<string, string>) => {
+		const template = commands.find(command => command.startsWith(prefix));
+		ok(template, `rendered command ${prefix}`);
+		const command = template.replace(/<[^>]+>/g, token => values[token] ?? token);
+		ok(!command.includes("<"), command);
+		return invoke(["bash", "-c", command]);
+	};
+	const isCode = (file: string) => !file.startsWith("docs/") && !file.endsWith(".md");
+	const replay = (recorded: string, reviewed: string, current: string) => {
+		const values: Record<string, string> = { "<recorded base sha>": recorded, "<last reviewed sha>": reviewed, "<base sha>": current };
+		for (const [prefix, key] of [["git merge-base <recorded", "<old base>"], ["git merge-base <base", "<new base>"]]) {
+			const result = recipe(prefix, values);
+			if (result.exitCode !== 0) return { kind: "full", conflicts: [] as string[], delta: [] as string[] };
+			values[key] = result.stdout.toString().trim();
+		}
+		const merged = recipe("git merge-tree ", values);
+		if (merged.exitCode !== 0 && merged.exitCode !== 1) return { kind: "full", conflicts: [], delta: [] };
+		const [tree, ...output] = merged.stdout.toString().split("\n");
+		ok(/^[a-f0-9]{40}$/.test(tree), "valid replay tree");
+		values["<replayed tree>"] = tree;
+		const entries = output.slice(0, output.indexOf(""));
+		const conflicts = [...new Set(entries.map(entry => {
+			const match = entry.match(/^\d+ [a-f0-9]+ [123]\t(.+)$/);
+			ok(match, entry);
+			return match[1];
+		}))].filter(isCode);
+		const diff = recipe("git diff --no-renames <replayed", values);
+		strictEqual(diff.exitCode, 0, diff.stderr.toString());
+		const paths = recipe("git diff --no-renames --name-only <replayed", values);
+		strictEqual(paths.exitCode, 0, paths.stderr.toString());
+		const delta = paths.stdout.toString().trim().split("\n").filter(Boolean).filter(isCode);
+		for (const file of conflicts) {
+			values["<path>"] = file;
+			for (const prefix of ["git diff --no-renames <old base>", "git diff --no-renames <new base>"]) {
+				const patch = recipe(prefix, values);
+				strictEqual(patch.exitCode, 0);
+				ok(patch.stdout.toString().includes(file), "conflict reviewer receives both own patches");
+			}
+		}
+		return { kind: conflicts.length || delta.length ? "delta" : "none", conflicts, delta };
+	};
+	git("init", "-b", "main"); git("config", "commit.gpgsign", "false");
+	commit("code.txt", "base\n", "base");
+	const base = commit("docs/guide.md", "base\n", "base docs");
+	git("checkout", "-b", "reviewed");
+	commit("code.txt", "reviewed\n", "reviewed code");
+	const reviewed = commit("docs/guide.md", "reviewed\n", "reviewed docs");
+	strictEqual(replay(base, reviewed, base).kind, "none", "unchanged head");
+	git("checkout", "main");
+	const upstream = commit("upstream.txt", "inherited\n", "new base");
+	git("checkout", "reviewed"); git("rebase", upstream);
+	strictEqual(replay(base, reviewed, upstream).kind, "none", "unchanged rebase excludes inherited code");
+	git("reset", "--soft", upstream); git("commit", "-m", "squash");
+	strictEqual(replay(base, reviewed, upstream).kind, "none", "unchanged squash");
+	commit("code.txt", "changed\n", "own change");
+	deepStrictEqual(replay(base, reviewed, upstream).delta, ["code.txt"], "own code detected");
+	git("checkout", "-b", "docs-base", upstream);
+	const docsBase = commit("docs/guide.md", "upstream docs\n", "docs conflict");
+	git("checkout", "-b", "docs-head", docsBase);
+	commit("code.txt", "reviewed\n", "replayed code");
+	commit("docs/guide.md", "resolved docs\n", "resolved docs");
+	strictEqual(replay(base, reviewed, docsBase).kind, "none", "docs-only conflict needs no round");
+	git("checkout", "-b", "code-base", upstream);
+	const codeBase = commit("code.txt", "upstream code\n", "code conflict");
+	git("checkout", "-b", "code-head", codeBase);
+	commit("code.txt", "resolved code\n", "resolution");
+	commit("docs/guide.md", "reviewed\n", "reviewed docs");
+	deepStrictEqual(replay(base, reviewed, codeBase).conflicts, ["code.txt"], "code conflict requires delta with both patches");
+	strictEqual(replay("missing-recorded-base", reviewed, codeBase).kind, "full", "missing recorded base forces full round");
+	console.log("PASS executable replay: unchanged head/rebase/squash empty; own code detected; docs/code conflicts classified; missing base forces full round");
+}
 try {
 	writeFileSync(manifest, JSON.stringify({
 		project: { name: "Monorepo", summary: "Monorepo contains an API and worker." },
@@ -434,6 +524,9 @@ try {
 	const directFlow = readFileSync(join(target, "docs/process/git-flow.md"), "utf8");
 	ok(directFlow.includes("git merge --ff-only task/NNNN-<slug>"));
 	ok(directFlow.includes("No PRs; review is in-session"));
+	ok(!existsSync(join(target, "docs/process/final-review.md")));
+	ok(!existsSync(join(target, ".omp/rules/final-review.md")));
+	ok(!readFileSync(join(target, "docs/index.md"), "utf8").includes("final-review"));
 	console.log("PASS landing direct: omitted/explicit metadata and every Markdown byte agree; legacy ff-only flow retained");
 
 	for (const tracking of [{ mode: "none" }, { mode: "local" }, { mode: "mcp", mcp: { server: "issues" } }]) {
@@ -446,6 +539,16 @@ try {
 			}));
 			await install({ manifest, target: prTarget });
 			const flow = readFileSync(join(prTarget, "docs/process/git-flow.md"), "utf8");
+			ok(existsSync(join(prTarget, "docs/process/final-review.md")), "pull-request installs final-review rule");
+			const rule = readFileSync(join(prTarget, "docs/process/final-review.md"), "utf8");
+			ok(readFileSync(join(prTarget, "docs/index.md"), "utf8").includes("(process/final-review.md)"));
+			for (const caller of ["docs/process/dispatch.md", "docs/process/map.md", "docs/process/plan-triage.md",
+				"docs/process/review-loop.md", "docs/process/git-flow.md", ".omp/skills/mosaic-execute/SKILL.md",
+				".claude/skills/mosaic-execute/SKILL.md", ".omp/agents/claude-reviewer.md",
+				".omp/agents/gpt-reviewer.md", ".claude/agents/reviewer.md"]) {
+				ok(readFileSync(join(prTarget, caller), "utf8").includes(caller.startsWith(".claude/") ? "docs/process/final-review.md" : "rule://final-review"), caller);
+			}
+			if (tracking.mode === "none" && topology === "monorepo") exerciseReplay(rule);
 			for (const passage of ["git rebase origin/master", "git push -u origin <branch>", "git push --force-with-lease origin <branch>",
 				'gh pr create --base master --head <branch> --title "<title>" --body-file <file>',
 				"every check", "every comment", "human merges", "merge method", "delete", "pr://<number>",
@@ -474,6 +577,29 @@ try {
 			const doctor = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: prTarget, stdout: "pipe", stderr: "pipe" });
 			strictEqual(doctor.exitCode, 0, `${doctor.stdout}\n${doctor.stderr}`);
 			ok(doctor.stdout.toString().includes("doctor: 0 fail, 0 warn, 0 cannot-evaluate"));
+			// Exercise structural failures on an actual installed PR harness, not source-text assertions.
+			const rulePath = join(prTarget, "docs/process/final-review.md");
+			rmSync(rulePath);
+			const missing = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: prTarget, stdout: "pipe", stderr: "pipe" });
+			ok(missing.exitCode !== 0 && missing.stdout.toString().includes("docs/process/final-review.md"), missing.stdout.toString());
+			writeFileSync(rulePath, rule);
+			const linkPath = join(prTarget, ".omp/rules/final-review.md");
+			rmSync(linkPath); symlinkSync("../../docs/process/missing-final-review.md", linkPath);
+			const broken = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: prTarget, stdout: "pipe", stderr: "pipe" });
+			ok(broken.exitCode !== 0 && broken.stdout.toString().includes("symlinks .omp/rules/final-review.md"), broken.stdout.toString());
+			rmSync(linkPath); symlinkSync("../../docs/process/final-review.md", linkPath);
+			const directTarget = join(scratch, `direct-${tracking.mode}-${topology}`);
+			const prInput = JSON.parse(readFileSync(manifest, "utf8"));
+			writeFileSync(manifest, JSON.stringify({ ...prInput, landing: { mode: "direct" } }));
+			await install({ manifest, target: directTarget });
+			ok(!existsSync(join(directTarget, "docs/process/final-review.md")));
+			ok(!existsSync(join(directTarget, ".omp/rules/final-review.md")));
+			for await (const file of new Bun.Glob("**/*.md").scan({ cwd: directTarget, dot: true, onlyFiles: true })) {
+				ok(!readFileSync(join(directTarget, file), "utf8").includes("final-review"), `direct caller leaked: ${file}`);
+			}
+			const directDoctor = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: directTarget, stdout: "pipe", stderr: "pipe" });
+			strictEqual(directDoctor.exitCode, 0, directDoctor.stdout.toString());
+			ok(directDoctor.stdout.toString().includes("doctor: 0 fail, 0 warn, 0 cannot-evaluate"));
 			console.log(`PASS landing pull-request: ${tracking.mode}/${topology}, complete flow, locators, no residue, doctor 0/0/0`);
 		}
 	}
@@ -535,8 +661,19 @@ try {
 	}
 	put(".omp/mosaic.json", JSON.stringify({ ...runtimeConfig, landing: undefined }));
 	run([bun, "tools/doctor.ts"], 0);
-	put(".omp/mosaic.json", JSON.stringify({ ...runtimeConfig, landing: { mode: "pull-request", host: "github" } }));
-	ok(run([bun, "tools/doctor.ts"], 0).includes("doctor: 0 fail, 0 warn, 0 cannot-evaluate"));
+	const compatibilityTarget = join(scratch, "close-out-compatibility");
+	writeFileSync(manifest, JSON.stringify({ ...input, landing: { mode: "pull-request", host: "github" } }));
+	await install({ manifest, target: compatibilityTarget });
+	const compatibilityConfigPath = join(compatibilityTarget, ".omp/mosaic.json");
+	const compatibilityConfig = JSON.parse(readFileSync(compatibilityConfigPath, "utf8"));
+	writeFileSync(compatibilityConfigPath, JSON.stringify({
+		...compatibilityConfig, landing: { mode: "pull-request", host: "github" },
+	}));
+	const compatibilityDoctor = Bun.spawnSync([bun, "tools/doctor.ts"], {
+		cwd: compatibilityTarget, stdout: "pipe", stderr: "pipe",
+	});
+	strictEqual(compatibilityDoctor.exitCode, 0, `${compatibilityDoctor.stdout}\n${compatibilityDoctor.stderr}`);
+	ok(compatibilityDoctor.stdout.toString().includes("doctor: 0 fail, 0 warn, 0 cannot-evaluate"));
 	console.log("PASS close-out compatibility: pull-request metadata without closeOut accepted");
 	put(".omp/mosaic.json", `${JSON.stringify(runtimeConfig, null, 2)}\n`);
 	writeFileSync(manifest, JSON.stringify(input));

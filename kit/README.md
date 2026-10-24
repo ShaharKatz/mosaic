@@ -105,6 +105,12 @@ runtime conventions; preserve existing project-only entries. Configure available
 levels through `modelRoles` in `.omp/config.yml`, keeping agent role references intact. Claude Code
 uses its own runtime model settings. Detailed maintenance checks belong in the guide, not in
 ordinary project instructions.
+Pull-request installations include a final review on the open PR, defaulting to `gpt-reviewer`
+(Claude Code: `reviewer` for the corresponding configured role). Later heads use the documented
+Git 2.40+ replay procedure to review only the branch's own code delta. Every PR, including
+docs-only and inline exemptions, still requires comment rulings and passing exact-head CI.
+Direct landing does not install this rule or its callers; no additional manifest field is needed.
+
 
 ## Reference
 

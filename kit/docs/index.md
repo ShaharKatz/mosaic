@@ -27,6 +27,9 @@
 | [git-flow](process/git-flow.md) | Target-repo branch and landing commands | Branching, committing, landing |
 | [dispatch](process/dispatch.md) | Bounded task and parallel ownership | Authoring tasks or dispatching executors |
 | [review-loop](process/review-loop.md) | Verdicts and correction cycle | Reviewing tasks or findings |
+{{LANDING_PULL_REQUEST}}
+| [final-review](process/final-review.md) | Open-PR final review, replay, comments and exact-head CI | PR opens, head changes, readiness or merge |
+{{/LANDING_PULL_REQUEST}}
 | [verification](process/verification.md) | Evidence and registry lifecycle | Writing/running verification or interpreting a failure |
 | [records](process/records.md) | Doc classes, routing, schemas | Editing a governed file |
 | [registries](process/registries.md) | Scope-based reading | Checking records or unfamiliar areas |

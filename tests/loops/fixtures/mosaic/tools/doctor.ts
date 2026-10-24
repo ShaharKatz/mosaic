@@ -92,6 +92,7 @@ let trackingMode = "none";
 type Standard = { name: string; paths: string[]; dir?: string; designSystem?: string };
 let standards: Standard[] = [];
 let repositories: { name: string; path: string; remote: string }[] = [];
+let landingMode = "direct";
 if (fs.existsSync(path.join(root, configPath))) {
 	const content = text("mosaic-config", configPath);
 	if (content !== undefined) {
@@ -155,6 +156,7 @@ if (fs.existsSync(path.join(root, configPath))) {
 			}
 			defaultBranch = config.defaultBranch;
 			trackingMode = tracking.mode;
+			landingMode = landing.mode;
 		} catch (error) {
 			finding("FAIL", "mosaic-config", configPath, String(error));
 		}
@@ -169,6 +171,7 @@ const processNames = [
 	"records", "registries", "plan-home", "stack", "human-gates", "writing-for-the-reader",
 	"targeted-tests", "records-guard", "model-notes", "intake", "tracker",
 ];
+if (landingMode === "pull-request") processNames.push("final-review");
 const skillNames = ["mosaic-plan", "mosaic-execute", "mosaic-gap-audit", "mosaic-intake", "mosaic-checkup", "mosaic-kit"];
 const agentPairs = [
 	["executor", "executor"], ["plan-adversary", "plan-adversary"], ["registry-scout", "registry-scout"],

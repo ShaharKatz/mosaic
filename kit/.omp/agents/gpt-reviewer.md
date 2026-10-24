@@ -29,7 +29,7 @@ Review independently: do not coordinate with or wait for another reviewer. Verif
 
 ## Lean verdict
 - Only `S` findings make a `REVISE`; return `P` findings and improvements as `[note]`s inside an `APPROVE`. Judge code paths and contracts; documentation, receipt and log wording are `[note]`s for the orchestrator, not a `REVISE`, unless it would land a wrong record, a false verification claim or an unsupported disposition (an `S` finding).
-- Delta rounds: when the dispatch names a last reviewed sha, review only the branch's own change since it — `git -C <repo> diff <last reviewed sha> <branch>`, or after a rebase the delta the dispatch supplies — confirm each fix resolves its finding and the delta adds no `S`; do not re-review the approved remainder.
+- Delta rounds: when the dispatch names a last reviewed sha, review only the branch's own change since it — `git -C <repo> diff <last reviewed sha> <branch>`, or after a rebase the delta the dispatch supplies{{LANDING_PULL_REQUEST}} using `rule://final-review`'s replay procedure for final rounds, never a raw old-head/new-head diff{{/LANDING_PULL_REQUEST}} — confirm each fix resolves its finding and the delta adds no `S`; do not re-review the approved remainder.
 - Reuse recorded verification for the reviewed sha; run only tests covering the diff. Keep the verdict to at most 15 lines before the findings.
 
 ```text
