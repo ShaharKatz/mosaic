@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { install } from "../../kit/install.ts";
@@ -221,6 +221,7 @@ async function exerciseStandardRegressions(input: Record<string, unknown>): Prom
 	deepStrictEqual(failures, []);
 }
 async function exerciseStandards(input: Record<string, unknown>): Promise<void> {
+	await exercisePrEvidence(input);
 	const names = ["excluded-data", "no-magic-strings", "shared-first", "testing"];
 	const snapshot = (root: string): Record<string, string> => {
 		const result: Record<string, string> = {};
@@ -356,6 +357,211 @@ async function exerciseStandards(input: Record<string, unknown>): Promise<void> 
 	ok(readFileSync(join(combined, "docs/standards/shared-first.md"), "utf8").includes("the project's design system or shared component library, if any"));
 	console.log("PASS standards CLI smoke: all four together, default data folder/generic design-system text, doctor 0/0/0");
 	writeFileSync(manifest, JSON.stringify(input));
+}
+async function exercisePrEvidence(input: Record<string, unknown>): Promise<void> {
+	const selected = { ...input, landing: { mode: "pull-request", host: "github" },
+		standards: [{ name: "pr-evidence", paths: ["src/**"] }] };
+	writeFileSync(manifest, JSON.stringify({ ...selected, landing: { mode: "direct" } }));
+	await rejects(install({ manifest, target: join(scratch, "evidence-direct") }), /pr-evidence requires landing.mode: pull-request/);
+	writeFileSync(manifest, JSON.stringify({ ...selected, landing: { mode: "pull-request", host: "other" } }));
+	await rejects(install({ manifest, target: join(scratch, "evidence-host") }), /landing.host must be github/);
+	for (const topology of ["monorepo", "multi-repo"]) {
+		const fresh = join(scratch, `evidence-${topology}`);
+		const evidenceInput = { ...selected, topology,
+			members: topology === "monorepo" ? [] : [{ name: "member", path: "member", stack: "generic", testCommand: "check", coverageNote: "" }],
+			remotes: { link: "https://example.invalid/root.git", members: { member: "https://example.invalid/member.git" } } };
+		writeFileSync(manifest, JSON.stringify(evidenceInput));
+		await install({ manifest, target: fresh });
+		if (topology === "multi-repo") {
+			mkdirSync(join(fresh, "member"));
+			const init = Bun.spawnSync(["git", "init", "-b", "main"], { cwd: join(fresh, "member"), stdout: "pipe", stderr: "pipe" });
+			strictEqual(init.exitCode, 0, init.stderr.toString());
+		}
+		mkdirSync(join(fresh, "src"));
+		writeFileSync(join(fresh, "src/example.txt"), "source\n");
+		const doctor = (code: number) => {
+			const result = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+			strictEqual(result.exitCode, code, `${result.stdout}\n${result.stderr}`);
+			return result.stdout.toString();
+		};
+		// No git inventory is needed for this disposable filesystem-only installation.
+		strictEqual(doctor(0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+		ok(existsSync(join(fresh, "docs/standards/pr-evidence.md")));
+		for (const port of [".omp", ".claude"]) ok(existsSync(join(fresh, `${port}/rules/pr-evidence.md`)));
+		ok(readFileSync(join(fresh, "docs/index.md"), "utf8").includes("[pr-evidence](standards/pr-evidence.md)"));
+		const template = readFileSync(join(fresh, ".github/pull_request_template.md"), "utf8");
+		ok(template.includes("## Evidence\n"));
+		const failures: string[] = [];
+		const probe = async (label: string, action: () => Promise<void> | void) => {
+			try { await action(); console.log(`PASS pr-evidence ${topology} ${label}`); }
+			catch (error) { failures.push(`${label}: ${String(error)}`); console.log(`FAIL pr-evidence ${topology} ${label}: ${String(error)}`); }
+		};
+		const original = "# Owner template\n\nKeep these bytes.\n";
+		for (const directory of ["", "docs", ".github"]) {
+			for (const stem of ["pull_request_template", "PULL_REQUEST_TEMPLATE", "PuLl_ReQuEsT_TeMpLaTe"]) for (const extension of [".md", ".txt", "", ".custom"]) {
+				const name = `${stem}${extension}`;
+				await probe(`default ${directory}/${name}`, async () => {
+					rmSync(join(fresh, ".github/pull_request_template.md"), { force: true });
+					const file = join(fresh, directory, name);
+					mkdirSync(dirname(file), { recursive: true });
+					try {
+						writeFileSync(file, original);
+						for (const force of [false, true]) {
+							await install({ manifest, target: fresh, force });
+							strictEqual(readFileSync(file, "utf8"), original);
+							if (directory !== ".github" || !name.toLowerCase().endsWith(".md")) ok(!existsSync(join(fresh, ".github/pull_request_template.md")));
+							else deepStrictEqual(readdirSync(join(fresh, ".github")).filter(name => name.toLowerCase() === "pull_request_template.md"), [name]);
+							ok(doctor(1).includes("requires a GitHub-honoured pull request template"));
+						}
+						for (const fake of ["```\n## Evidence\n```\n", "~~~text\n## Evidence\n~~~\n", "<!--\n## Evidence\n-->\n", "<!--\r\n## Evidence\r\n-->\r\n"]) {
+							writeFileSync(file, original + fake);
+							ok(doctor(1).includes("requires a GitHub-honoured pull request template"));
+						}
+						writeFileSync(file, original + "\n## Evidence\n\nObserved output.\n");
+						strictEqual(doctor(0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+					} finally { rmSync(file, { force: true }); }
+				});
+			}
+		}
+		await probe("CRLF text default", () => {
+			rmSync(join(fresh, ".github/pull_request_template.md"), { force: true });
+			const file = join(fresh, ".github/pull_request_template.txt");
+			writeFileSync(file, "## Summary\r\nOwner template.\r\n");
+			try {
+				doctor(1);
+				writeFileSync(file, "## Summary\r\nOwner template.\r\n\r\n## Evidence\r\nObserved output.\r\n");
+				strictEqual(doctor(0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+			} finally { rmSync(file); }
+		});
+		await probe("effective default precedence", () => {
+			const github = join(fresh, ".github/pull_request_template.md");
+			const rootTemplate = join(fresh, "pull_request_template.txt");
+			const docs = join(fresh, "docs/pull_request_template.md");
+			writeFileSync(github, original);
+			writeFileSync(rootTemplate, original + "\n## Evidence\n");
+			writeFileSync(docs, original + "\n## Evidence\n");
+			try {
+				doctor(1);
+				rmSync(github);
+				strictEqual(doctor(0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+				writeFileSync(rootTemplate, original);
+				doctor(1);
+				rmSync(rootTemplate);
+				strictEqual(doctor(0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+			} finally {
+				for (const file of [github, rootTemplate, docs]) rmSync(file, { force: true });
+			}
+		});
+		for (const directory of ["", "docs", ".github"]) {
+			await probe(`named-only ${directory}`, async () => {
+				rmSync(join(fresh, ".github/pull_request_template.md"), { force: true });
+				const file = join(fresh, directory, "PuLl_ReQuEsT_TeMpLaTe/custom.txt");
+				mkdirSync(dirname(file), { recursive: true });
+				writeFileSync(file, original + "\n## Evidence\n");
+				try {
+					doctor(1);
+					await install({ manifest, target: fresh, force: true });
+					strictEqual(readFileSync(file, "utf8"), original + "\n## Evidence\n");
+					strictEqual(readFileSync(join(fresh, ".github/pull_request_template.md"), "utf8"), template);
+					strictEqual(doctor(0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+				} finally { rmSync(dirname(file), { recursive: true }); }
+			});
+		}
+		for (const directory of ["", "docs", ".github"]) {
+			for (const name of ["pull_request_template.md", "PULL_REQUEST_TEMPLATE.txt", "pull_request_template", "PULL_REQUEST_TEMPLATE/custom.md"]) {
+				for (const force of [false, true]) await probe(`overlay preserves ${directory}/${name}, force=${force}`, async () => {
+					const overlay = join(scratch, `evidence-overlay-${topology}`);
+					rmSync(overlay, { force: true, recursive: true });
+					rmSync(join(fresh, ".github/pull_request_template.md"), { force: true });
+					const relative = join(directory, name), file = join(fresh, relative), replacement = join(overlay, relative);
+					mkdirSync(dirname(file), { recursive: true });
+					mkdirSync(dirname(replacement), { recursive: true });
+					writeFileSync(file, original);
+					writeFileSync(replacement, "overlay must not replace owner bytes\n");
+					try {
+						await install({ manifest, target: fresh, overlay, force });
+						strictEqual(readFileSync(file, "utf8"), original);
+					} finally {
+						if (name.includes("/")) rmSync(dirname(file), { recursive: true, force: true });
+						else rmSync(file, { force: true });
+					}
+				});
+			}
+		}
+		for (const existing of ["pull_request_template.txt", "docs/PULL_REQUEST_TEMPLATE", ".github/pull_request_template.md"]) {
+			for (const incoming of [".github/PULL_REQUEST_TEMPLATE.txt", "pull_request_template.custom", "docs/pull_request_template.md"]) {
+				for (const force of [false, true]) await probe(`cross-path overlay ${existing} ← ${incoming}, force=${force}`, async () => {
+					rmSync(join(fresh, ".github/pull_request_template.md"), { force: true });
+					const overlay = join(scratch, `cross-path-overlay-${topology}`);
+					rmSync(overlay, { force: true, recursive: true });
+					mkdirSync(dirname(join(overlay, incoming)), { recursive: true });
+					mkdirSync(dirname(join(fresh, existing)), { recursive: true });
+					writeFileSync(join(fresh, existing), original);
+					writeFileSync(join(overlay, incoming), "## Evidence\nOverlay must not replace the effective default.\n");
+					try {
+						await install({ manifest, target: fresh, overlay, force });
+						strictEqual(readFileSync(join(fresh, existing), "utf8"), original);
+						ok(!existsSync(join(fresh, incoming)), `competing default created: ${incoming}`);
+						doctor(1);
+					} finally {
+						rmSync(join(fresh, existing), { force: true });
+						rmSync(join(fresh, incoming), { force: true });
+					}
+				});
+			}
+		}
+		await probe("at most one incoming default", async () => {
+			const overlay = join(scratch, `multiple-default-overlay-${topology}`);
+			const defaults = [".github/pull_request_template.md", ".github/PULL_REQUEST_TEMPLATE.txt", "pull_request_template", "docs/pull_request_template.custom"];
+			for (const file of defaults.slice(1)) {
+				mkdirSync(dirname(join(overlay, file)), { recursive: true });
+				writeFileSync(join(overlay, file), "## Evidence\nIncoming template.\n");
+			}
+			const destination = join(scratch, `multiple-default-target-${topology}`);
+			await install({ manifest, target: destination, overlay });
+			strictEqual(defaults.filter(file => existsSync(join(destination, file))).length, 1, "one effective incoming default, never competing defaults");
+		});
+		for (const hasOwner of [false, true]) {
+			for (const force of [false, true]) await probe(`template descendant asset, owner=${hasOwner}, force=${force}`, async () => {
+				const overlay = join(scratch, `asset-overlay-${topology}`);
+				const asset = ".github/pull_request_template.assets/example.txt";
+				const payload = "Template support asset: keep these bytes.\n";
+				mkdirSync(dirname(join(overlay, asset)), { recursive: true });
+				writeFileSync(join(overlay, asset), payload);
+				const destination = join(scratch, `asset-target-${topology}-${hasOwner}-${force}`);
+				if (hasOwner) {
+					mkdirSync(destination, { recursive: true });
+					writeFileSync(join(destination, "pull_request_template.txt"), original);
+				}
+				await install({ manifest, target: destination, overlay, force });
+				ok(existsSync(join(destination, asset)), "descendant asset must not be suppressed as a competing default");
+				strictEqual(readFileSync(join(destination, asset), "utf8"), payload);
+				if (hasOwner) {
+					strictEqual(readFileSync(join(destination, "pull_request_template.txt"), "utf8"), original);
+					ok(!existsSync(join(destination, ".github/pull_request_template.md")), "owner default still blocks the kit default");
+				} else {
+					ok(existsSync(join(destination, ".github/pull_request_template.md")), "descendant asset must not displace the real default");
+					strictEqual(readFileSync(join(destination, ".github/pull_request_template.md"), "utf8"), template);
+				}
+			});
+		}
+		await probe("unselected overlay template retained", async () => {
+			const overlay = join(scratch, `unselected-overlay-${topology}`);
+			mkdirSync(join(overlay, ".github"), { recursive: true });
+			writeFileSync(join(overlay, ".github/pull_request_template.md"), original);
+			writeFileSync(manifest, JSON.stringify({ ...evidenceInput, standards: [] }));
+			await install({ manifest, target: join(scratch, `unselected-overlay-target-${topology}`), overlay });
+			strictEqual(readFileSync(join(scratch, `unselected-overlay-target-${topology}/.github/pull_request_template.md`), "utf8"), original);
+			writeFileSync(manifest, JSON.stringify(evidenceInput));
+		});
+		deepStrictEqual(failures, []);
+		writeFileSync(join(fresh, ".github/pull_request_template.md"), template);
+		const configFile = join(fresh, ".omp/mosaic.json");
+		const config = JSON.parse(readFileSync(configFile, "utf8"));
+		writeFileSync(configFile, JSON.stringify({ ...config, landing: { mode: "direct" } }));
+		ok(doctor(1).includes("pr-evidence requires landing.mode: pull-request"));
+		console.log(`PASS pr-evidence ${topology}: selected doctor 0/0/0; all template locations/cases preserved with and without force; missing/fake heading FAIL, merged heading PASS; invalid mode FAIL`);
+	}
 }
 function exerciseCloseOut(flow: string): void {
 	const repo = join(scratch, "close-out-history");

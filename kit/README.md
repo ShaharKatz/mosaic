@@ -219,8 +219,8 @@ Optional `landing.closeOut: "two-commit"` is accepted only in pull-request mode;
 
 ### Opt-in team standards
 
-Offer all four standards during survey, selecting only what the human confirms:
-`excluded-data`, `no-magic-strings`, `shared-first`, and `testing`.
+Offer all five standards during survey, selecting only what the human confirms:
+`excluded-data`, `no-magic-strings`, `shared-first`, `testing`, and `pr-evidence`.
 The optional `standards` array contains unique entries with `name` and a nonempty `paths` list.
 Globs are repository-relative single-line strings without backslashes, parentheses, or `.`/`..` segments.
 Derive globs from surveyed source/test paths and show them to the human, rather than guessing from a language alone.
@@ -280,6 +280,18 @@ before any write. Offline validation/deltas need no MCP.
 DIAGRAMS_DRAWIO blocks select opt-in text after tracking/landing/close-out and before
 topology/values; DIAGRAMS_ROOT and DRAWIO_PACKAGE expand selected values.
 Without the bundle, no diagram files, tools, MCP requirement or caller hooks are installed.
+
+PR evidence requires `landing: { mode: "pull-request", host: "github" }`. Ask whether the project
+wants it and which source paths need evidence; browser checks and picture capture separately need the human's OK.
+Selecting it installs `.github/pull_request_template.md` only when no project default template exists.
+Defaults are non-directory case-insensitive `pull_request_template` files with any extension (e.g. `.md`, `.txt`) or none,
+in `.github/`, the root or `docs/`, in that precedence order. Named files in case-insensitive
+`PULL_REQUEST_TEMPLATE/` directories are preserved but do not block the kit default. Every existing template
+is protected from overlays and `--force`; hand the owner the kit's `## Evidence` section to merge.
+Doctor requires that heading in the effective default, never a shadowed or named template. Missing evidence alone
+is procedural (P); an observed wrong state or false/unsupported claim is substantive (S).
+In multi-repo installations, doctor checks only the link repository's template; offer the Evidence section
+to each selected member repository's owner for its own pull requests, without assuming the link template applies there.
 
 ### Mechanical helper: greenfield/manual path
 

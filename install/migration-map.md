@@ -15,7 +15,7 @@ A human-owned choice is not resolved by taking a conservative guess. Record the 
 
 ## Opt-in standards survey and placement
 
-Offer `excluded-data`, `no-magic-strings`, `shared-first`, and `testing` individually; no selection is implicit.
+Offer `excluded-data`, `no-magic-strings`, `shared-first`, `testing`, and `pr-evidence` individually; no selection is implicit.
 Derive each proposed scope from surveyed members/components' actual source and test paths and show the globs to the human for confirmation.
 Record selected manifest entries (`name`, `paths`, optional excluded-data `dir` or shared-first `designSystem`) and equivalent existing standards as alignment rows.
 Merge equivalent standards into one canonical authority and move them losslessly to `docs/standards/<name>.md`, preserving project requirements and repairing inbound links and scoped pointers rather than installing duplicates.
@@ -24,6 +24,7 @@ Leave testing's project-owned **Surfaces** section empty for the project to fill
 When excluded-data is selected, phase 3 adds the one anchored folder ignore line (default `/excluded_data/`), preserving existing entries; the helper never edits `.gitignore`. In multi-repo projects, choose the folder inside the repo whose scripts write the data and add the ignore line in that repo, not the link repo that ignores the member. Record the manifest directory relative to the installation root and the ignore line relative to its owning repo.
 Route data outputs there instead of adding per-path ignores. Credentials retain existing secrets handling. Verify `git check-ignore -q <dir>/` in the folder's owning repo, with its owner-relative path; doctor resolves that repo from the nearest existing ancestor and reports cannot-evaluate for this check alone without a git repository.
 Doctor treats an unmatched glob as FAIL when repository inventory is complete, because stale scope silently disables enforcement; with unavailable repositories it reports cannot-evaluate and names them instead. Reconcile scopes and restore inventory coverage before claiming installation complete.
+Ask whether the project wants PR evidence and which source paths; require GitHub pull-request landing. Inventory non-directory case-insensitive `pull_request_template` defaults with any extension (e.g. `.md`, `.txt`) or none, in `.github` → root → `docs` precedence, plus named files in case-insensitive `PULL_REQUEST_TEMPLATE/` directories there. Preserve all existing templates even with overlays/force; named-only templates do not block kit default placement. Hand the owner the kit `## Evidence` section to merge into the effective default; doctor checks only that default, not shadowed or named templates. Browser checks/pictures need the human's explicit OK; missing evidence alone is procedural, observed wrong states or false/unsupported claims are substantive.
 
 
 ## Tracking survey and H-tracking

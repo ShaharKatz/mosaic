@@ -142,9 +142,12 @@ if (fs.existsSync(path.join(root, configPath))) {
 				if (!Array.isArray(config.standards)) throw new Error("standards must be an array");
 				const names = new Set<string>();
 				for (const standard of config.standards) {
-					if (!standard || !["excluded-data", "no-magic-strings", "shared-first", "testing"].includes(standard.name)
+					if (!standard || !["excluded-data", "no-magic-strings", "shared-first", "testing", "pr-evidence"].includes(standard.name)
 						|| names.has(standard.name)) throw new Error("standards must have supported, unique names");
 					names.add(standard.name);
+					if (standard.name === "pr-evidence" && (landing.mode !== "pull-request" || landing.host !== "github")) {
+						throw new Error("pr-evidence requires landing.mode: pull-request with landing.host: github");
+					}
 					if (!Array.isArray(standard.paths) || !standard.paths.length || standard.paths.some((glob: unknown) =>
 						typeof glob !== "string" || !glob.trim() || /[\r\n\0\\()]/.test(glob) || glob.includes("\u007b\u007b")
 						|| path.isAbsolute(glob) || glob.split("/").some(part => part === "." || part === ".."))) {
@@ -217,6 +220,28 @@ if (fs.existsSync(path.join(root, configPath))) {
 for (const standard of standards) {
 	standardFiles.add(`docs/standards/${standard.name}.md`);
 	for (const port of [".omp", ".claude"]) standardFiles.add(`${port}/rules/${standard.name}.md`);
+}
+if (standards.some(standard => standard.name === "pr-evidence") && typeof Bun.markdown?.render === "function") {
+	let effective: string | undefined;
+	for (const directory of [".github", "", "docs"]) {
+		const base = path.join(root, directory);
+		if (!fs.existsSync(base) || !fs.lstatSync(base).isDirectory()) continue;
+		const entry = fs.readdirSync(base, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))
+			.find(entry => !entry.isDirectory() && /^pull_request_template(?:\..+)?$/i.test(entry.name));
+		if (entry) { effective = path.join(directory, entry.name); break; }
+	}
+	let hasEvidence = false;
+	if (effective) {
+		const content = text("standards", effective);
+		if (content !== undefined) {
+			Bun.markdown.render(content, { heading: (children, { level }) => {
+				if (level === 2 && children.trim() === "Evidence") hasEvidence = true;
+				return "";
+			} });
+		}
+	}
+	if (!hasEvidence) finding("FAIL", "standards", effective ?? ".github/pull_request_template.md",
+		"pr-evidence requires a GitHub-honoured pull request template as the effective default containing an ## Evidence heading; merge the kit Evidence section into that project-owned default");
 }
 const processNames = [
 	"mosaic-core", "map", "plan-triage", "git-flow", "dispatch", "review-loop", "verification",

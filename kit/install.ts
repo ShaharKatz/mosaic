@@ -1,15 +1,15 @@
 #!/usr/bin/env bun
 import { spawnSync } from "node:child_process";
 import { chmod, lstat, mkdir, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import { BUNDLE_FILES, DIAGRAMS_ROOT, DRAWIO_PACKAGE, safeRoot, safeDiagramsRoot, diagramPathKey } from "./tools/constants/diagrams.ts";
 
 type Member = { name: string; path: string; stack: string; testCommand: string; coverageNote: string };
 type Tracking = { mode: "none" | "local" | "mcp"; mcp?: { server: string; team?: string; queue?: string } };
 type Landing = { mode: "direct"; host?: never; closeOut?: never } | { mode: "pull-request"; host: "github"; closeOut?: "two-commit" };
-type Standard = { name: "excluded-data" | "no-magic-strings" | "shared-first" | "testing"; paths: string[]; dir?: string; designSystem?: string };
-const standardNames = ["excluded-data", "no-magic-strings", "shared-first", "testing"];
+type Standard = { name: "excluded-data" | "no-magic-strings" | "shared-first" | "testing" | "pr-evidence"; paths: string[]; dir?: string; designSystem?: string };
+const standardNames = ["excluded-data", "no-magic-strings", "shared-first", "testing", "pr-evidence"];
 type Manifest = {
   project: { name: string; summary: string };
   topology: "multi-repo" | "monorepo";
@@ -115,6 +115,9 @@ function manifestFrom(value: unknown): Manifest {
         throw new Error(`${field}.name must be a supported, unique standard`);
       }
       names.add(entry.name as string);
+      if (entry.name === "pr-evidence" && (landing.mode !== "pull-request" || landing.host !== "github")) {
+        throw new Error("pr-evidence requires landing.mode: pull-request with landing.host: github");
+      }
       if (!Array.isArray(entry.paths) || !entry.paths.length) throw new Error(`${field}.paths must be a nonempty array`);
       for (const glob of entry.paths) {
         line(glob, `${field}.paths`);
@@ -191,6 +194,7 @@ function render(content: string, file: string, manifest: Manifest): string {
   const keep = (mode: string) => mode === `TRACKING_${manifest.tracking.mode.toUpperCase()}`;
   const landingToken = manifest.landing.mode === "direct" ? "LANDING_DIRECT" : "LANDING_PULL_REQUEST";
   const closeOutToken = manifest.landing.closeOut === "two-commit" ? "CLOSE_OUT_TWO_COMMIT" : "CLOSE_OUT_DEFAULT";
+  const evidenceSelected = manifest.standards?.some(entry => entry.name === "pr-evidence");
   const selected = content.replace(/^\{\{(TRACKING_NONE|TRACKING_LOCAL|TRACKING_MCP)\}\}\n([\s\S]*?)^\{\{\/\1\}\}\n?/gm,
     (_match, mode: string, body: string) => keep(mode) ? body : "")
     .replace(/\{\{(TRACKING_NONE|TRACKING_LOCAL|TRACKING_MCP)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
@@ -208,7 +212,9 @@ function render(content: string, file: string, manifest: Manifest): string {
     .replace(/\{\{DIAGRAMS_DRAWIO\}\}([\s\S]*?)\{\{\/DIAGRAMS_DRAWIO\}\}/g,
       (_match, body: string) => manifest.diagrams?.mode === "drawio" ? body : "")
     .replace(/\{\{(MULTI_REPO|MONOREPO)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
-      (_match, topology: string, body: string) => topology === (manifest.topology === "monorepo" ? "MONOREPO" : "MULTI_REPO") ? body : "");
+      (_match, topology: string, body: string) => topology === (manifest.topology === "monorepo" ? "MONOREPO" : "MULTI_REPO") ? body : "")
+    .replace(/^\{\{PR_EVIDENCE\}\}\n([\s\S]*?)^\{\{\/PR_EVIDENCE\}\}\n?/gm,
+      (_match, body: string) => evidenceSelected ? body : "");
   const result = selected.replace(/\{\{([^{}]+)\}\}/g, (_match, token: string) => {
     switch (token) {
       case "PROJECT_NAME": return manifest.project.name;
@@ -282,6 +288,8 @@ export async function install(options: { manifest: string; target: string; kit?:
   const entries = new Map<string, Entry>();
   const sourceNames = await readdir(source);
   await collect(source, roots.filter(name => sourceNames.includes(name)), entries, manifest);
+  const evidenceSelected = manifest.standards?.some(entry => entry.name === "pr-evidence");
+  if (evidenceSelected) await collect(source, [".github/pull_request_template.md"], entries, manifest);
   // Overlays remain complete replacements, but cannot enable files excluded by the selected mode.
   if (overlay) await collect(overlay, (await readdir(overlay)).sort(), entries);
   if (manifest.landing.mode !== "pull-request") {
@@ -310,6 +318,42 @@ export async function install(options: { manifest: string; target: string; kit?:
     const standardFile = /^(?:docs\/standards|\.omp\/rules|\.claude\/rules)\/([^/]+)\.md$/.exec(name);
     if (standardFile && standardNames.includes(standardFile[1]!) && !manifest.standards?.some(entry => entry.name === standardFile[1])) entries.delete(name);
     if (name === "docs/standards" && !manifest.standards?.length) entries.delete(name);
+  }
+  if (evidenceSelected) {
+    const templates: string[] = [];
+    let hasDefault = false;
+    for (const directory of [".github", "", "docs"]) {
+      const base = join(target, directory);
+      if (!(await existing(base))?.isDirectory()) continue;
+      for (const entry of await readdir(base, { withFileTypes: true })) {
+        if (/^pull_request_template(?:\..+)?$/i.test(entry.name) && !entry.isDirectory()) {
+          templates.push(join(directory, entry.name));
+          hasDefault = true;
+        } else if (entry.name.toLowerCase() === "pull_request_template" && entry.isDirectory()) {
+          for (const child of await readdir(join(base, entry.name), { withFileTypes: true })) {
+            if (child.isFile() || child.isSymbolicLink()) templates.push(join(directory, entry.name, child.name));
+          }
+        }
+      }
+    }
+    const incomingDefaults = [...entries].filter(([name, entry]) => entry.kind !== "directory"
+      && [".github", ".", "docs"].includes(dirname(name))
+      && /^pull_request_template(?:\.[^/]+)?$/i.test(basename(name)))
+      .map(([name]) => name).sort((a, b) => {
+        const aPriority = a.toLowerCase().startsWith(".github/") ? 0 : a.includes("/") ? 2 : 1;
+        const bPriority = b.toLowerCase().startsWith(".github/") ? 0 : b.includes("/") ? 2 : 1;
+        return aPriority - bPriority || a.localeCompare(b);
+      });
+    for (const name of incomingDefaults) {
+      if (hasDefault || name !== incomingDefaults[0]) entries.delete(name);
+    }
+    const protectedTemplates = new Set(templates.map(file => file.toLowerCase()));
+    for (const name of entries.keys()) {
+      if (protectedTemplates.has(name.toLowerCase())) entries.delete(name);
+    }
+    if (templates.length) {
+      console.log(`Preserving project-owned pull request templates: ${templates.join(", ")}. Merge the ## Evidence section from the kit template; --force never replaces project templates.`);
+    }
   }
   const config = entries.get(".omp/mosaic.json");
   if (config?.kind === "file") {

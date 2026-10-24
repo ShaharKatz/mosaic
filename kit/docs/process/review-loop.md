@@ -13,6 +13,9 @@ Read when: a task or parallel wave is ready for review, or a reviewer returns fi
 - Dispatch the independent reviewers required by the active runtime with identical inputs; each must return `APPROVE`.
 - Exception: `class: docs` task waves use one cross-family reviewer per `rule://dispatch`; closure packets still require the full pair.
 - Each verdict is `APPROVE` or `REVISE`, with numbered actionable findings: S/P, file:line, what, why, the violated rule or trap quoted (a P-number alone is not grounding), and precise fix instruction. S = substantive (would land a wrong record — a misrouted, duplicate, or mis-homed entry included —, false claim, broken landing, or defect); P = procedural. Optional improvements stay `[note]`s. **Lean verdicts:** only `S` findings make a `REVISE`; an all-`P` verdict is `APPROVE` with the findings listed, and the orchestrator applies mechanical ones directly (logging which) or defers them without another review round. Reviewers run only tests covering the diff and reuse recorded verification for the reviewed sha; keep the verdict to at most 15 lines before the findings.
+{{PR_EVIDENCE}}
+- Rule on [PR evidence](../standards/pr-evidence.md): missing evidence alone is P; an observed wrong state or a false/unsupported claim is S. Browser checks and pictures require the human's OK; absent visual proof is stated as not verified visually, never asserted.
+{{/PR_EVIDENCE}}
 - In the Execution log, write one verdict line per task/reviewer/round, then one line per finding using these shapes (`closure` names the closure task):
   `- <task> R<round> <reviewer>: APPROVE|REVISE (<n> findings)`
   `- <task> R<round> <reviewer>: <S|P> — <finding in ≤ 15 words> → <fixed|rejected: reason|deferred: where>`
