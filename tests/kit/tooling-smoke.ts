@@ -61,6 +61,11 @@ try {
 			ok(!flow.includes("No PRs") && !flow.includes("--ff-only"), flow);
 			strictEqual(flow.includes("tracker://<key>"), tracking.mode !== "none");
 			strictEqual(flow.includes("one pull request per targeted repo"), topology === "multi-repo");
+			const planHome = readFileSync(join(prTarget, "docs/process/plan-home.md"), "utf8");
+			ok(planHome.includes("gh pr list --head docs/NNNN-reserve --state all"), "later sessions can recover the reservation pull request");
+			strictEqual(planHome.includes("title, body and commit subjects name the plan number, never the tracker item key"), tracking.mode === "mcp");
+			strictEqual(planHome.includes("Do not reuse a ledger row title containing the key as the pull request title"), tracking.mode === "mcp");
+			strictEqual(planHome.includes("can move the item to done when the reservation merges, before any work has landed"), tracking.mode === "mcp");
 			for (const file of ["docs/process/verification.md", "docs/process/tracker.md", "docs/process/plan-home.md", "docs/product/README.md",
 				".omp/skills/mosaic-gap-audit/SKILL.md", ".claude/skills/mosaic-gap-audit/SKILL.md",
 				".omp/skills/mosaic-execute/SKILL.md", ".claude/skills/mosaic-execute/SKILL.md"]) {
