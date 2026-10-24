@@ -109,6 +109,10 @@ if (fs.existsSync(path.join(root, configPath))) {
 			if (landing.mode === "pull-request") {
 				if (landing.host !== "github") throw new Error("landing.host must be github in pull-request mode");
 			} else if (landing.host !== undefined) throw new Error("landing.host is only valid in pull-request mode");
+			if (landing.closeOut !== undefined) {
+				if (landing.mode !== "pull-request") throw new Error("landing.closeOut is only valid in pull-request mode");
+				if (landing.closeOut !== "two-commit") throw new Error("landing.closeOut must be two-commit");
+			}
 			defaultBranch = config.defaultBranch;
 			trackingMode = tracking.mode;
 		} catch (error) {

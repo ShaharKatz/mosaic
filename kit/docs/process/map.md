@@ -22,7 +22,7 @@ Read [the documentation index](../index.md) for project documents and [the archi
 | `draft → approved` | Human only; orchestrator records verbal approval | First task-branch commit, or a docs branch landed on {{DEFAULT_BRANCH}} |
 | `approved → executing` | Orchestrator | First task-branch commit |
 | `executing → review` | Orchestrator after task approvals and recorded Verification output | Task-branch commit |
-| `review → done` | Human sign-off; orchestrator records it | Task-branch commit and archive, then land; ledger sync per `rule://plan-home` |
+| `review → done` | Human sign-off; orchestrator records it | {{CLOSE_OUT_DEFAULT}}Task-branch commit and archive, then land; ledger sync per `rule://plan-home`{{/CLOSE_OUT_DEFAULT}}{{CLOSE_OUT_TWO_COMMIT}}Squashed code commit, then one close-out commit in each pull request that owns terminal records (archive, ledger landing locator, registry sync);{{MULTI_REPO}} member-homed plans keep R4's link-repo ledger sync after the member merges;{{/MULTI_REPO}} land per `rule://git-flow`{{/CLOSE_OUT_TWO_COMMIT}} |
 | Any status `→ abandoned` | Orchestrator or human; one-line reason | Archive in the home repo; mark and repoint ledger rows |
 ## Work selection
 Read `rule://plan-triage` to choose inline mechanical work, the light path, or a numbered plan.

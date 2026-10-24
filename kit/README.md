@@ -142,6 +142,7 @@ The skill supplies every value from survey evidence; source Markdown uses these 
 | `MCP_SERVER` / `MCP_TEAM` / `MCP_QUEUE` | Runtime server and optional scope; absent team/queue render readable instructions, not invented scope |
 | `TRACKING_NONE` / `TRACKING_LOCAL` / `TRACKING_MCP` | Mode blocks with slash-prefixed closing tokens; keep only the selected mode; may contain topology blocks |
 | `LANDING_DIRECT` / `LANDING_PULL_REQUEST` | Landing blocks with slash-prefixed closing tokens; selected after tracking and before topology; may contain topology blocks |
+| `CLOSE_OUT_TWO_COMMIT` / `CLOSE_OUT_DEFAULT` | Close-out blocks with slash-prefixed closing tokens; selected after landing and before topology; opt-in two-commit layout or unchanged default layout |
 | `MULTI_REPO` / `MONOREPO` | Non-nested topology blocks selected after tracking and landing blocks; then expand value tokens |
 
 The following examples document the schema consumed by the mechanical helper, not human setup
@@ -205,6 +206,7 @@ The helper defaults omitted `topology` to `multi-repo`, `git.defaultBranch` to `
 Commands render from each entry's path; adapt the stack document when proven cwd differs.
 Tracking accepts `{ "mode": "local" }` or `{ "mode": "mcp", "mcp": { "server": "issues", "team": "ENG", "queue": "Triage" } }` instead of `none`. These names are illustrative: MCP `server` is the exact runtime name and required; `team` and `queue` are optional strings supported by H-tracking. Omit `mcp` for other modes.
 Landing accepts `{ "mode": "pull-request", "host": "github" }` instead of direct; host is required (GitHub only) in pull-request mode and rejected in direct mode. The H3 survey selects pull-request from branch protection requiring PRs on the default branch, merged PRs on it, or documented PR flow, deriving the host from the remote. Direct pushes with no PRs select direct; conflicting or absent evidence requires a human question, never a default. Tracking blocks are resolved first, then landing blocks, then topology and values; tracking and landing may contain each other and topology, never same-family nesting or mode blocks inside topology blocks.
+Optional `landing.closeOut: "two-commit"` is accepted only in pull-request mode; unknown values and direct-mode use are rejected. Select it only from project history showing squash-then-close-out commits or the human's choice, never by default. Absence preserves today's layout, including older runtime metadata. Render close-out blocks after landing and before topology/values. The task branch becomes one code commit (plan subject, task subjects in its body) before opening the pull request, followed by one close-out commit carrying its locator and all repo-owned terminal documentation; later review/CI code corrections use fixup/autosquash, keeping close-out last. Member-homed plans keep R4's link-repo ledger sync after the member merges.
 
 ### Mechanical helper: greenfield/manual path
 

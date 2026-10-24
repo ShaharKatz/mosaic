@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 
 type Member = { name: string; path: string; stack: string; testCommand: string; coverageNote: string };
 type Tracking = { mode: "none" | "local" | "mcp"; mcp?: { server: string; team?: string; queue?: string } };
-type Landing = { mode: "direct"; host?: never } | { mode: "pull-request"; host: "github" };
+type Landing = { mode: "direct"; host?: never; closeOut?: never } | { mode: "pull-request"; host: "github"; closeOut?: "two-commit" };
 type Manifest = {
   project: { name: string; summary: string };
   topology: "multi-repo" | "monorepo";
@@ -57,6 +57,10 @@ function manifestFrom(value: unknown): Manifest {
   if (landing.mode === "pull-request") {
     if (landing.host !== "github") throw new Error("landing.host must be github in pull-request mode");
   } else if (landing.host !== undefined) throw new Error("landing.host is only valid in pull-request mode");
+  if (landing.closeOut !== undefined) {
+    if (landing.mode !== "pull-request") throw new Error("landing.closeOut is only valid in pull-request mode");
+    if (landing.closeOut !== "two-commit") throw new Error("landing.closeOut must be two-commit");
+  }
   line(value.project.name, "project.name");
   line(value.project.summary, "project.summary");
   line(value.remotes.link, "remotes.link");
@@ -137,9 +141,10 @@ function membersFor(file: string, manifest: Manifest): string {
   }
 }
 function render(content: string, file: string, manifest: Manifest): string {
-  // Resolve tracking, then landing, then topology, then values. Own-line mode tags consume their newline.
+  // Resolve tracking, landing, close-out, topology, then values. Own-line tags consume their newline.
   const keep = (mode: string) => mode === `TRACKING_${manifest.tracking.mode.toUpperCase()}`;
   const landingToken = manifest.landing.mode === "direct" ? "LANDING_DIRECT" : "LANDING_PULL_REQUEST";
+  const closeOutToken = manifest.landing.closeOut === "two-commit" ? "CLOSE_OUT_TWO_COMMIT" : "CLOSE_OUT_DEFAULT";
   const selected = content.replace(/^\{\{(TRACKING_NONE|TRACKING_LOCAL|TRACKING_MCP)\}\}\n([\s\S]*?)^\{\{\/\1\}\}\n?/gm,
     (_match, mode: string, body: string) => keep(mode) ? body : "")
     .replace(/\{\{(TRACKING_NONE|TRACKING_LOCAL|TRACKING_MCP)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
@@ -148,6 +153,10 @@ function render(content: string, file: string, manifest: Manifest): string {
       (_match, mode: string, body: string) => mode === landingToken ? body : "")
     .replace(/\{\{(LANDING_DIRECT|LANDING_PULL_REQUEST)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
       (_match, mode: string, body: string) => mode === landingToken ? body : "")
+    .replace(/^\{\{(CLOSE_OUT_TWO_COMMIT|CLOSE_OUT_DEFAULT)\}\}\n([\s\S]*?)^\{\{\/\1\}\}\n?/gm,
+      (_match, mode: string, body: string) => mode === closeOutToken ? body : "")
+    .replace(/\{\{(CLOSE_OUT_TWO_COMMIT|CLOSE_OUT_DEFAULT)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
+      (_match, mode: string, body: string) => mode === closeOutToken ? body : "")
     .replace(/\{\{(MULTI_REPO|MONOREPO)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
       (_match, topology: string, body: string) => topology === (manifest.topology === "monorepo" ? "MONOREPO" : "MULTI_REPO") ? body : "");
   const result = selected.replace(/\{\{([^{}]+)\}\}/g, (_match, token: string) => {

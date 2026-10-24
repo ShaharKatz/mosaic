@@ -19,6 +19,58 @@ function run(command: string[], code: number): string {
 }
 const bun = process.execPath;
 const manifest = join(scratch, "manifest.json");
+function exerciseCloseOut(flow: string): void {
+	const repo = join(scratch, "close-out-history");
+	mkdirSync(repo);
+	const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "Smoke",
+		GIT_AUTHOR_EMAIL: "smoke@example.invalid", GIT_COMMITTER_NAME: "Smoke", GIT_COMMITTER_EMAIL: "smoke@example.invalid",
+		GIT_EDITOR: ":", GIT_SEQUENCE_EDITOR: ":" };
+	const git = (...args: string[]): string => {
+		const result = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe", env });
+		strictEqual(result.exitCode, 0, `${args.join(" ")}\n${result.stdout}\n${result.stderr}`);
+		return result.stdout.toString().trim();
+	};
+	git("init", "-b", "main");
+	git("config", "commit.gpgsign", "false");
+	writeFileSync(join(repo, "code.txt"), "base\n");
+	git("add", "."); git("commit", "-m", "base");
+	const base = git("rev-parse", "HEAD");
+	git("update-ref", "refs/remotes/origin/main", base);
+	git("checkout", "-b", "task");
+	writeFileSync(join(repo, "code.txt"), "implementation\n");
+	git("add", "."); git("commit", "-m", "0001-T1: implement");
+	writeFileSync(join(repo, "extra.txt"), "task two\n");
+	git("add", "."); git("commit", "-m", "0001-T2: finish");
+	git("reset", "--soft", base);
+	git("commit", "-m", "0001: plan subject", "-m", "0001-T1: implement\n0001-T2: finish");
+	writeFileSync(join(repo, "terminal.md"), "done; pr://1\n");
+	git("add", "."); git("commit", "-m", "0001: close-out");
+	git("checkout", "main");
+	git("checkout", "-b", "upstream-topic");
+	writeFileSync(join(repo, "upstream.txt"), "upstream topic\n");
+	git("add", "."); git("commit", "-m", "upstream topic");
+	git("checkout", "main");
+	writeFileSync(join(repo, "mainline.txt"), "mainline\n");
+	git("add", "."); git("commit", "-m", "mainline");
+	git("merge", "--no-ff", "upstream-topic", "-m", "upstream merge");
+	git("update-ref", "refs/remotes/origin/main", "HEAD");
+	git("checkout", "task"); git("rebase", "origin/main");
+	const code = git("rev-parse", "HEAD^");
+	writeFileSync(join(repo, "code.txt"), "implementation corrected\n");
+	git("add", "."); git("commit", "--fixup", code);
+	const command = flow.match(/`(GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash [^`]+)`/)?.[1];
+	ok(command, "rendered autosquash command");
+	const rendered = command.replace("<code commit>", code).replace("<base sha>", base);
+	const rebased = Bun.spawnSync(["bash", "-c", rendered], { cwd: repo, stdout: "pipe", stderr: "pipe", env });
+	strictEqual(rebased.exitCode, 0, `${rebased.stdout}\n${rebased.stderr}`);
+	const commits = git("rev-list", "--reverse", "origin/main..HEAD").split("\n");
+	strictEqual(commits.length, 2, `autosquash must not replay default-branch merge history: ${git("log", "--oneline", "origin/main..HEAD")}`);
+	deepStrictEqual(commits.map(commit => git("show", "-s", "--format=%s", commit)), ["0001: plan subject", "0001: close-out"]);
+	strictEqual(git("show", "--format=", "--name-only", commits[1]), "terminal.md");
+	strictEqual(git("show", `${commits[0]}:code.txt`), "implementation corrected");
+	ok(git("show", "-s", "--format=%b", commits[0]).includes("0001-T1: implement\n0001-T2: finish"));
+	console.log("PASS executable close-out: upstream merge, rebase, rendered autosquash; two commits, corrected code first, terminal-only close-out last");
+}
 try {
 	writeFileSync(manifest, JSON.stringify({
 		project: { name: "Monorepo", summary: "Monorepo contains an API and worker." },
@@ -59,6 +111,7 @@ try {
 				"every check", "every comment", "human merges", "merge method", "delete", "pr://<number>",
 				"gh pr view <number> --json state,mergeCommit", "git merge-base --is-ancestor"]) ok(flow.includes(passage), passage);
 			ok(!flow.includes("No PRs") && !flow.includes("--ff-only"), flow);
+			ok(!flow.includes("reset --soft"), "unconfigured pull-request retains unsquashed layout");
 			strictEqual(flow.includes("tracker://<key>"), tracking.mode !== "none");
 			strictEqual(flow.includes("one pull request per targeted repo"), topology === "multi-repo");
 			const planHome = readFileSync(join(prTarget, "docs/process/plan-home.md"), "utf8");
@@ -84,12 +137,55 @@ try {
 			console.log(`PASS landing pull-request: ${tracking.mode}/${topology}, complete flow, locators, no residue, doctor 0/0/0`);
 		}
 	}
+	for (const tracking of [{ mode: "none" }, { mode: "local" }, { mode: "mcp", mcp: { server: "issues" } }]) {
+		for (const topology of ["monorepo", "multi-repo"]) {
+			const closeTarget = join(scratch, `close-${tracking.mode}-${topology}`);
+			const landing = { mode: "pull-request", host: "github", closeOut: "two-commit" };
+			writeFileSync(manifest, JSON.stringify({
+				...input, tracking, topology, landing,
+				remotes: { ...input.remotes, members: { api: "https://github.com/example/api.git" } },
+				members: topology === "multi-repo" ? [{ ...input.components[0], name: "api" }] : [],
+			}));
+			await install({ manifest, target: closeTarget });
+			deepStrictEqual(JSON.parse(readFileSync(join(closeTarget, ".omp/mosaic.json"), "utf8")).landing, landing);
+			const flow = readFileSync(join(closeTarget, "docs/process/git-flow.md"), "utf8");
+			if (tracking.mode === "none" && topology === "monorepo") exerciseCloseOut(flow);
+			for (const passage of ["git reset --soft <base sha> && git commit", "plan's subject", "task subjects",
+				"git commit --fixup <code commit>", "GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <code commit>^",
+				"Keep the code commit first and any close-out commit last, with no other commits", "no follow-up commit records landing"]) ok(flow.includes(passage), passage);
+			strictEqual(flow.includes("owns no terminal documentation keeps only its code commit"), topology === "multi-repo");
+			strictEqual(flow.includes("Member-homed plans keep R4's link-repo ledger sync"), topology === "multi-repo");
+			if (topology === "multi-repo") ok(flow.includes("open it before the link repo's close-out, which records every targeted repo's locator"));
+			const map = readFileSync(join(closeTarget, "docs/process/map.md"), "utf8");
+			ok(map.includes("Squashed code commit, then one close-out commit"));
+			for (const runtime of [".omp", ".claude"]) {
+				const execute = readFileSync(join(closeTarget, runtime, "skills/mosaic-execute/SKILL.md"), "utf8");
+				ok(execute.includes("ONE code commit (plan subject, task subjects in its body)"));
+				ok(execute.includes("hold these terminal changes for the ONE close-out commit after step 11"));
+				ok(execute.includes("Commit all repo-owned terminal documentation together as ONE close-out commit"));
+				ok(execute.indexOf("Run ledger lint on every changed governed record and resolve failures before committing.") < execute.indexOf("Commit all repo-owned terminal documentation together"));
+				strictEqual(execute.includes("Member-homed plans keep R4's link-repo ledger sync"), topology === "multi-repo");
+				ok(!execute.includes("Commit the terminal plan and ledger changes."));
+				ok(execute.indexOf("ONE code commit") < execute.indexOf("**Archive on sign-off:**"));
+			}
+			for await (const file of new Bun.Glob("**/*.md").scan({ cwd: closeTarget, dot: true, onlyFiles: true })) {
+				ok(!readFileSync(join(closeTarget, file), "utf8").includes("{{"), file);
+			}
+			const doctor = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: closeTarget, stdout: "pipe", stderr: "pipe" });
+			strictEqual(doctor.exitCode, 0, `${doctor.stdout}\n${doctor.stderr}`);
+			ok(doctor.stdout.toString().includes("doctor: 0 fail, 0 warn, 0 cannot-evaluate"));
+			console.log(`PASS close-out two-commit: ${tracking.mode}/${topology}, code/terminal split, locator, fixups, doctor 0/0/0`);
+		}
+	}
 	const runtimeConfig = JSON.parse(readFileSync(join(target, ".omp/mosaic.json"), "utf8"));
 	for (const [landing, diagnostic] of [
 		[{ mode: "pull-request" }, "landing.host must be github in pull-request mode"],
 		[{ mode: "unknown" }, "landing.mode must be direct or pull-request"],
 		[{ mode: "direct", host: "github" }, "landing.host is only valid in pull-request mode"],
 		[{ mode: "pull-request", host: "other" }, "landing.host must be github in pull-request mode"],
+		[{ mode: "direct", closeOut: "two-commit" }, "landing.closeOut is only valid in pull-request mode"],
+		[{ mode: "pull-request", host: "github", closeOut: "unknown" }, "landing.closeOut must be two-commit"],
+		[{ mode: "pull-request", host: "github", closeOut: null }, "landing.closeOut must be two-commit"],
 	] as const) {
 		writeFileSync(manifest, JSON.stringify({ ...input, landing }));
 		await rejects(install({ manifest, target: join(scratch, "invalid-landing") }),
@@ -99,6 +195,9 @@ try {
 	}
 	put(".omp/mosaic.json", JSON.stringify({ ...runtimeConfig, landing: undefined }));
 	run([bun, "tools/doctor.ts"], 0);
+	put(".omp/mosaic.json", JSON.stringify({ ...runtimeConfig, landing: { mode: "pull-request", host: "github" } }));
+	ok(run([bun, "tools/doctor.ts"], 0).includes("doctor: 0 fail, 0 warn, 0 cannot-evaluate"));
+	console.log("PASS close-out compatibility: pull-request metadata without closeOut accepted");
 	put(".omp/mosaic.json", `${JSON.stringify(runtimeConfig, null, 2)}\n`);
 	writeFileSync(manifest, JSON.stringify(input));
 	console.log("PASS landing invalid manifests: missing/unsupported host, unknown mode, direct host rejected");
