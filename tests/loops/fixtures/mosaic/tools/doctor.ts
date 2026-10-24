@@ -193,19 +193,49 @@ for (const file of referenceFiles) {
 	}
 }
 // Markdown links belong to Markdown documents, not evidence logs, diagrams, or other assets.
-for (const file of ["AGENTS.md", "CLAUDE.md", ...files("references", "docs").filter(file => file.endsWith(".md"))]) {
+if (typeof Bun.markdown?.render !== "function") {
+	finding("CANNOT-EVALUATE", "references", ".", "Markdown-link checks require Bun.markdown.render");
+} else for (const file of ["AGENTS.md", "CLAUDE.md", ...files("references", "docs").filter(file => file.endsWith(".md"))]) {
 	const content = text("references", file);
 	if (content === undefined) continue;
+	// Line scanning retains candidate locations; the Markdown parser decides which are links.
+	// Only bare destinations of plain path characters are swapped for a sentinel: removing a pipe,
+	// quote, bracket, equals sign or backtick, or the `--`/`?` before an angle-bracket destination's
+	// `>` (a comment or processing-instruction end), could change the parse; others are always checked.
+	let prefix = "doctor-link";
+	while (content.includes(prefix)) prefix += "-";
+	const candidates: { line: number; destination: string; start: number; end: number; sentinel?: string }[] = [];
+	let offset = 0;
 	for (const [index, line] of lines(content).entries()) {
-		for (const match of line.matchAll(/!?\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+["'][^\n]*?["'])?\s*\)/g)) {
+		for (const match of line.matchAll(/!?\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+["'][^\n]*?["'])?\s*\)/gd)) {
 			const destination = match[1] ?? match[2]!;
 			if (/^(?:[a-z][\w+.-]*:|\/|#)/i.test(destination)) continue;
-			try {
-				const relative = decodeURIComponent(destination.split(/[?#]/, 1)[0]!);
-				if (relative) reference(file, path.join(path.dirname(file), relative), destination, index + 1, true);
-			} catch {
-				finding("FAIL", "references", file, `line ${index + 1}: invalid link ${destination}`);
-			}
+			const [start, end] = match.indices![match[1] === undefined ? 2 : 1]!;
+			const sentinel = match[1] === undefined && /^[\w./#?%+~-]+$/.test(destination) ? `${prefix}-${candidates.length}` : undefined;
+			candidates.push({ line: index + 1, destination, start: offset + start, end: offset + end, sentinel });
+		}
+		offset += line.length + 1;
+	}
+	let marked = content;
+	for (let index = candidates.length - 1; index >= 0; index--) {
+		const candidate = candidates[index]!;
+		if (candidate.sentinel) {
+			marked = marked.slice(0, candidate.start) + candidate.sentinel + marked.slice(candidate.end);
+		}
+	}
+	const links = new Set<string>();
+	Bun.markdown.render(marked, {
+		link: (_children, { href }) => { links.add(href); return ""; },
+		image: (_children, { src }) => { links.add(src); return ""; },
+	});
+	for (const candidate of candidates) {
+		const { destination, line, sentinel } = candidate;
+		if (sentinel && !links.has(sentinel)) continue;
+		try {
+			const relative = decodeURIComponent(destination.split(/[?#]/, 1)[0]!);
+			if (relative) reference(file, path.join(path.dirname(file), relative), destination, line, true);
+		} catch {
+			finding("FAIL", "references", file, `line ${line}: invalid link ${destination}`);
 		}
 	}
 }

@@ -11,7 +11,7 @@ Without cutoff, existing project records are reconciled, not replaced with empty
 
 ## Installing into a project
 
-Keep a mosaic checkout as the source. You need Bun, Git, and clean target/member worktrees.
+Keep a mosaic checkout as the source. You need Bun with `Bun.markdown` (verified on 1.4.2), Git, and clean target/member worktrees.
 In an omp or Claude Code session at maximum effort **in the mosaic checkout**, invoke:
 
 ```text

@@ -69,6 +69,33 @@ try {
 	rmSync(join(target, "docs/gate-unreadable.md"));
 	rmSync(join(target, "docs/plans/archived/0999-gate.md"));
 	console.log("PASS checkup gate: bad root and unreadable input exit 2; incomplete JSON shape unchanged");
+	for (const [name, content, code, line] of [
+		["inline code", "`[example](missing.md)`\n", 0, 0],
+		["fenced code", "```\n[example](missing.md)\n```\n", 0, 0],
+		["indented code", "    [example](missing.md)\n", 0, 0],
+		["lone backtick", "An unmatched ` in this paragraph.\n\n[b](missing.md)\n", 1, 3],
+		["backtick in title", '[b](missing.md "a ` title")\n', 1, 1],
+		["GFM table pipe", "| Example | Continuation | Link |\n| --- | --- | --- |\n| `[x](a|b)` | [b](missing.md) |\n", 1, 3],
+		["HTML comment end", "<!-- [x](<-->)\n\n[b](missing.md)\n", 1, 3],
+		["sentinel collision", "[valid](<doctor-link-1>)\n\n`[example](missing.md)`\n", 0, 0],
+		["image", "![b](missing.md)\n", 1, 1],
+	] as const) {
+		put("docs/doctor-link-1", "A real link target.\n");
+		put("docs/markdown-links.md", content);
+		const result = run([bun, "tools/doctor.ts"], code);
+		if (line) ok(result.includes(`FAIL references docs/markdown-links.md: line ${line}: unresolved missing.md`), result);
+		console.log(`PASS doctor Markdown: ${name}`);
+	}
+	rmSync(join(target, "docs/markdown-links.md"));
+	rmSync(join(target, "docs/doctor-link-1"));
+	// Import only after disabling the parser; a static import would evaluate doctor first.
+	put("without-markdown.ts", 'Bun.markdown = undefined;\nawait import("./tools/doctor.ts");\n');
+	const withoutMarkdown = run([bun, "without-markdown.ts"], 2);
+	strictEqual(withoutMarkdown.split("\n").filter(line => line.startsWith("CANNOT-EVALUATE ")).length, 1, withoutMarkdown);
+	ok(withoutMarkdown.includes("CANNOT-EVALUATE references .: Markdown-link checks require Bun.markdown.render"), withoutMarkdown);
+	ok(withoutMarkdown.includes("doctor: 0 fail, 0 warn, 1 cannot-evaluate"), withoutMarkdown);
+	rmSync(join(target, "without-markdown.ts"));
+	console.log("PASS doctor Markdown: unavailable parser reports one cannot-evaluate");
 
 	for (const file of ["view.tsx", "Makefile", ".github/workflows/check.yml", "docs/diagram.drawio", ".claude/assets/font.ttf", "image.png"]) {
 		put(file, file.endsWith(".png") || file.endsWith(".ttf") ? new Uint8Array([0, 255, 123, 123]) : "{{project syntax}}\n");
