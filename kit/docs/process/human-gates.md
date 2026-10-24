@@ -27,7 +27,12 @@ Read when: drafting an approval request, an intake or leftovers digest, or a sig
 | plan-adversary | Independent review of the proposed approach |
 | REVISE / APPROVE | Changes required / accepted |
 | `files:` | Files this task is allowed to change |
+{{LANDING_DIRECT}}
 | ff-only land | Add the reviewed commits to {{DEFAULT_BRANCH}} without a merge commit |
+{{/LANDING_DIRECT}}
+{{LANDING_PULL_REQUEST}}
+| pull-request land | The human merges the reviewed pull request after its checks pass |
+{{/LANDING_PULL_REQUEST}}
 | registry-scout | A search of existing obligations, known traps, and related plans |
 | light path | A small change executed and reviewed without a plan document |
 | Unverified | What the available checks could not prove and why |

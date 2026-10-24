@@ -3,7 +3,7 @@
 Choose the work procedure via [plan-triage](../process/plan-triage.md); [plan-home](../process/plan-home.md#r1r8) is canonical for numbering, homing, local ledgers, and status truth.
 This master ledger indexes every plan in every repo; lifecycle: `draft → approved → executing → review → done`, or `abandoned`.
 
-| # | Title | Status | Target repo | Branch | Landed commit |
+| # | Title | Status | Target repo | Branch | {{LANDING_DIRECT}}Landed commit{{/LANDING_DIRECT}}{{LANDING_PULL_REQUEST}}Landed{{/LANDING_PULL_REQUEST}} |
 |---|---|---|---|---|---|
 
 

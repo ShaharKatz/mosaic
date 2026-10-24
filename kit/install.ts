@@ -6,11 +6,13 @@ import { parseArgs } from "node:util";
 
 type Member = { name: string; path: string; stack: string; testCommand: string; coverageNote: string };
 type Tracking = { mode: "none" | "local" | "mcp"; mcp?: { server: string; team?: string; queue?: string } };
+type Landing = { mode: "direct"; host?: never } | { mode: "pull-request"; host: "github" };
 type Manifest = {
   project: { name: string; summary: string };
   topology: "multi-repo" | "monorepo";
   git: { defaultBranch: string };
   tracking: Tracking;
+  landing: Landing;
   remotes: { link: string; members: Record<string, string> };
   members: Member[];
   components: Member[];
@@ -48,6 +50,13 @@ function manifestFrom(value: unknown): Manifest {
       if (tracking.mcp[field] !== undefined) line(tracking.mcp[field], `tracking.mcp.${field}`);
     }
   } else if (tracking.mcp !== undefined) throw new Error("tracking.mcp is only valid in mcp mode");
+  const landing = value.landing === undefined ? { mode: "direct" } : value.landing;
+  if (!record(landing) || (landing.mode !== "direct" && landing.mode !== "pull-request")) {
+    throw new Error("landing.mode must be direct or pull-request");
+  }
+  if (landing.mode === "pull-request") {
+    if (landing.host !== "github") throw new Error("landing.host must be github in pull-request mode");
+  } else if (landing.host !== undefined) throw new Error("landing.host is only valid in pull-request mode");
   line(value.project.name, "project.name");
   line(value.project.summary, "project.summary");
   line(value.remotes.link, "remotes.link");
@@ -77,6 +86,7 @@ function manifestFrom(value: unknown): Manifest {
   }
   return {
     project: value.project as Manifest["project"], topology, git: { defaultBranch }, tracking: tracking as Tracking,
+    landing: landing as Landing,
     remotes: { link: value.remotes.link, members: remotes as Record<string, string> },
     members: value.members as Member[], components: components as Member[],
   };
@@ -127,12 +137,17 @@ function membersFor(file: string, manifest: Manifest): string {
   }
 }
 function render(content: string, file: string, manifest: Manifest): string {
-  // Tracking conditionals: a tag on its own line is consumed with its newline (no blank-line residue); inline tags keep the line.
+  // Resolve tracking, then landing, then topology, then values. Own-line mode tags consume their newline.
   const keep = (mode: string) => mode === `TRACKING_${manifest.tracking.mode.toUpperCase()}`;
+  const landingToken = manifest.landing.mode === "direct" ? "LANDING_DIRECT" : "LANDING_PULL_REQUEST";
   const selected = content.replace(/^\{\{(TRACKING_NONE|TRACKING_LOCAL|TRACKING_MCP)\}\}\n([\s\S]*?)^\{\{\/\1\}\}\n?/gm,
     (_match, mode: string, body: string) => keep(mode) ? body : "")
     .replace(/\{\{(TRACKING_NONE|TRACKING_LOCAL|TRACKING_MCP)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
       (_match, mode: string, body: string) => keep(mode) ? body : "")
+    .replace(/^\{\{(LANDING_DIRECT|LANDING_PULL_REQUEST)\}\}\n([\s\S]*?)^\{\{\/\1\}\}\n?/gm,
+      (_match, mode: string, body: string) => mode === landingToken ? body : "")
+    .replace(/\{\{(LANDING_DIRECT|LANDING_PULL_REQUEST)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
+      (_match, mode: string, body: string) => mode === landingToken ? body : "")
     .replace(/\{\{(MULTI_REPO|MONOREPO)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
       (_match, topology: string, body: string) => topology === (manifest.topology === "monorepo" ? "MONOREPO" : "MULTI_REPO") ? body : "");
   const result = selected.replace(/\{\{([^{}]+)\}\}/g, (_match, token: string) => {
@@ -210,7 +225,7 @@ export async function install(options: { manifest: string; target: string; kit?:
       commit = revision.status === 0 ? revision.stdout.trim() || "unknown" : "unknown";
     }
     config.content = Buffer.from(`${JSON.stringify({
-      defaultBranch: manifest.git.defaultBranch, topology: manifest.topology, tracking: manifest.tracking, kit: { commit },
+      defaultBranch: manifest.git.defaultBranch, topology: manifest.topology, tracking: manifest.tracking, landing: manifest.landing, kit: { commit },
     }, null, 2)}\n`);
   }
   const targetStat = await existing(target);

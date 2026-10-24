@@ -119,10 +119,10 @@ These are surveyed facts, not choices made to fit a template:
 
 Monorepo plans live in root `docs/plans/` with `repo: link-repo`; `files:` and `reads:` are
 repo-root-relative. Components do not get separate branches or plan homes. The skill derives the
-default branch from `origin/HEAD`, falling back only to the sole `main`/`master` branch on origin;
+default branch from `origin/HEAD`, using the [survey derivation](../install/placeholders.md#derive-values-do-not-guess) when that ref is unavailable;
 missing or conflicting evidence needs a ruling. Existing PR/CI and deployment policy is preserved
 unless the human overrides it. `.omp/mosaic.json` holds runtime `defaultBranch`, `topology`,
-`tracking`, and source provenance in `kit.commit`; the generated manifest is an installation
+`tracking`, `landing`, and source provenance in `kit.commit`; the generated manifest is an installation
 record, not runtime configuration.
 
 ### Placeholders and generated manifest schema
@@ -141,7 +141,8 @@ The skill supplies every value from survey evidence; source Markdown uses these 
 | `TRACKING` | `tracking.mode`: `none`, `local`, or `mcp`; omitted helper input defaults to `none` |
 | `MCP_SERVER` / `MCP_TEAM` / `MCP_QUEUE` | Runtime server and optional scope; absent team/queue render readable instructions, not invented scope |
 | `TRACKING_NONE` / `TRACKING_LOCAL` / `TRACKING_MCP` | Mode blocks with slash-prefixed closing tokens; keep only the selected mode; may contain topology blocks |
-| `MULTI_REPO` / `MONOREPO` | Non-nested topology blocks selected after tracking blocks; then expand value tokens |
+| `LANDING_DIRECT` / `LANDING_PULL_REQUEST` | Landing blocks with slash-prefixed closing tokens; selected after tracking and before topology; may contain topology blocks |
+| `MULTI_REPO` / `MONOREPO` | Non-nested topology blocks selected after tracking and landing blocks; then expand value tokens |
 
 The following examples document the schema consumed by the mechanical helper, not human setup
 steps. A multi-repo record has at least one member:
@@ -155,6 +156,7 @@ steps. A multi-repo record has at least one member:
   "topology": "multi-repo",
   "git": { "defaultBranch": "main" },
   "tracking": { "mode": "none" },
+  "landing": { "mode": "direct" },
   "remotes": {
     "link": "https://example.invalid/atlas.git",
     "members": { "api": "https://example.invalid/api.git" }
@@ -178,8 +180,9 @@ A monorepo record uses components instead; `components` may be omitted or empty:
     "summary": "Atlas contains the API in one repository."
   },
   "topology": "monorepo",
-  "git": { "defaultBranch": "master" },
+  "git": { "defaultBranch": "main" },
   "tracking": { "mode": "none" },
+  "landing": { "mode": "direct" },
   "remotes": { "link": "https://example.invalid/atlas.git" },
   "members": [],
   "components": [{
@@ -197,10 +200,11 @@ Each member/component requires `name`, root-relative `path`, `stack`, `testComma
 be absolute or contain backslashes, `.` or `..` segments. Names use letters/digits first, then
 letters/digits/dot/underscore/hyphen. Manifest strings are single-line and contain no placeholders.
 Multi-repo member remotes are keyed by member name; monorepo `remotes.members` may be omitted.
-The helper defaults omitted `topology` to `multi-repo`, `git.defaultBranch` to `main`, and
-`tracking` to `{ "mode": "none" }`, but the skill records all three explicitly from survey evidence.
+The helper defaults omitted `topology` to `multi-repo`, `git.defaultBranch` to `main`,
+`tracking` to `{ "mode": "none" }`, and `landing` to `{ "mode": "direct" }`, but the skill records each explicitly from survey evidence.
 Commands render from each entry's path; adapt the stack document when proven cwd differs.
-Tracking accepts `{ "mode": "local" }` or `{ "mode": "mcp", "mcp": { "server": "linear", "team": "ENG", "queue": "Triage" } }` instead of `none`. These names are illustrative: MCP `server` is the exact runtime name and required; `team` and `queue` are optional strings supported by H-tracking. Omit `mcp` for other modes.
+Tracking accepts `{ "mode": "local" }` or `{ "mode": "mcp", "mcp": { "server": "issues", "team": "ENG", "queue": "Triage" } }` instead of `none`. These names are illustrative: MCP `server` is the exact runtime name and required; `team` and `queue` are optional strings supported by H-tracking. Omit `mcp` for other modes.
+Landing accepts `{ "mode": "pull-request", "host": "github" }` instead of direct; host is required (GitHub only) in pull-request mode and rejected in direct mode. The H3 survey selects pull-request from branch protection requiring PRs on the default branch, merged PRs on it, or documented PR flow, deriving the host from the remote. Direct pushes with no PRs select direct; conflicting or absent evidence requires a human question, never a default. Tracking blocks are resolved first, then landing blocks, then topology and values; tracking and landing may contain each other and topology, never same-family nesting or mode blocks inside topology blocks.
 
 ### Mechanical helper: greenfield/manual path
 

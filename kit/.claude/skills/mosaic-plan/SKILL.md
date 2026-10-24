@@ -47,5 +47,5 @@ Planning runs at maximum effort. Use the configured planning role; if that role 
 
 ## Phase 3 — Ledger and approval
 1. Read `docs/process/records.md`; read `docs/process/plan-home.md`.
-   Confirm the reserved master-ledger row's title and status; do not add it twice. For a member-homed plan, seed or update the local ledger using R3's schema.
+   {{LANDING_PULL_REQUEST}}Before approval, confirm the reservation pull request is merged (`gh pr view <n> --json state` must report `MERGED`), re-fetch `{{DEFAULT_BRANCH}}`, and confirm its ledger contains the reserved row. {{/LANDING_PULL_REQUEST}}Confirm the reserved master-ledger row's title and status; do not add it twice. For a member-homed plan, seed or update the local ledger using R3's schema.
 2. Read `docs/process/human-gates.md`; read `docs/process/map.md`; read `docs/process/tracker.md`. Present the plan and a Planning-log summary: rounds, standing rejections, human rulings, and the retained mode-specific collision report with its limitations and unresolved overlaps. Only the human authorizes `draft → approved`; record that authorization before changing status, then follow the installed tracking mode's approval procedure. Do not begin execution in this invocation.

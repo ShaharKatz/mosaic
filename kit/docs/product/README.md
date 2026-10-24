@@ -68,7 +68,7 @@ implementing an actual change** in a repo.
 - **Why:** running the full flow for data-only changes wastes time and money and bloats the master
   ledger without changing code or behavior.
 - **How exempt changes land:** still never on `{{DEFAULT_BRANCH}}` (the guard-main hook applies) — use a
-  short-lived `docs/<slug>` branch, land rebase-first `--ff-only` as usual. No plan doc, no ledger
+  short-lived `docs/<slug>` branch, {{LANDING_DIRECT}}land rebase-first `--ff-only` as usual{{/LANDING_DIRECT}}{{LANDING_PULL_REQUEST}}land through the pull-request sequence in `rule://git-flow`{{/LANDING_PULL_REQUEST}}. No plan doc, no ledger
   row, no executor/reviewer dispatch; the orchestrator does the work inline with the human directing
   in-session.
 - **The line:** the moment ingested material implies *action* (code, automation, or project configuration),

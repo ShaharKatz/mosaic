@@ -106,7 +106,7 @@ Use `diff -r` for content and compare entry types, symlink targets, and modes to
 
 Read the rendered target `docs/process/tracker.md` for the selected mode's read-only verification: validate preserved/seeded items only in `local`; verify server/team/queue access through mounted tools in `mcp`; confirm `none` has no installed local tracker paths or template metadata. Do not invent validation commands or MCP capabilities.
 Installation performs no MCP writes. Existing external tickets stay authoritative; a configured or owner-named server without mounted tools is Unverified until read access is demonstrated. Never seed a live workspace as an installation check.
-If topology or contradictory/unknown default-branch, landing/deploy, or safety constraints cannot be represented honestly, stop under `kit/docs/process/human-gates.md`; migration does not authorize a repository split or policy redesign. Observed PR-with-CI policy is an automatic kit-text adaptation, not itself a conflict needing permission (H3); a human may choose otherwise.
+If topology or contradictory/unknown default-branch, landing/deploy, or safety constraints cannot be represented honestly, stop under `kit/docs/process/human-gates.md`; migration does not authorize a repository split or policy redesign. H3 selects manifest `landing.mode` from evidence: branch protection requiring PRs on the default branch, merged PRs on it, or documented PR flow → `pull-request`, with `host: "github"` derived from the remote (GitHub only); direct pushes with no PRs → `direct`, no host. Conflicting or absent evidence requires a human question, never a default. Preserve observed policy unless the human rules otherwise.
 
 ## Installed-kit adaptations and gate
 
@@ -133,9 +133,10 @@ Token names below mean the name enclosed by two opening and two closing braces. 
 | `TRACKING` | H-tracking's selected `tracking.mode`: `none`, `local`, or `mcp`; omitted helper input defaults to `none`, not an inferred survey result. |
 | `MCP_SERVER`, `MCP_TEAM`, `MCP_QUEUE` | Runtime server name and optional known scope; missing optional values render readable instructions, not fabricated team/queue names. |
 | `TRACKING_NONE` / `TRACKING_LOCAL` / `TRACKING_MCP` and closing tokens | Keep the selected mode's body, remove markers; these blocks may contain topology conditionals. |
+| `LANDING_DIRECT` / `LANDING_PULL_REQUEST` and closing tokens | Select the manifest landing mode after tracking and before topology; tracking and landing blocks may contain each other and topology blocks, never same-family nesting or mode blocks inside topology blocks. |
 | `MULTI_REPO` / `MONOREPO` and their slash-prefixed closing tokens | Non-nested topology blocks: keep only the selected topology's body after mode selection; remove markers before value expansion. |
 
-Derive landing policy from CI configuration, repository guidance, and observable branch protection. When the target lands by PR into the derived branch with CI, render that policy in `docs/process/git-flow.md` instead of the kit's no-PR/ff-only default, retaining required reviews, sign-off, safety, and deployment constraints. Reconcile all contradictory kit landing instructions/callers and hook diagnostic text; record each deviation in `kit-adaptations.md`. Cite inaccessible protection data as unavailable rather than invented; ask only if the evidence conflicts or cannot establish a policy.
+Render the H3-selected `landing` policy and locator callers via the manifest rather than replacing the helper's direct baseline by hand. Retain required reviews, sign-off, and project CI/safety/deployment constraints; record further deviations in `kit-adaptations.md`. Cite inaccessible protection data as unavailable; do not infer direct mode from failed access. `.omp/mosaic.json` always records landing beside tracking, with direct only the backward-compatible helper default.
 
 ## Worked choices
 

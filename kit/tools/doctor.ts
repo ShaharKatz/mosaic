@@ -104,6 +104,11 @@ if (fs.existsSync(path.join(root, configPath))) {
 					}
 				}
 			} else if (tracking.mcp !== undefined) throw new Error("tracking.mcp is only valid in mcp mode");
+			const landing = config.landing === undefined ? { mode: "direct" } : config.landing;
+			if (!landing || (landing.mode !== "direct" && landing.mode !== "pull-request")) throw new Error("landing.mode must be direct or pull-request");
+			if (landing.mode === "pull-request") {
+				if (landing.host !== "github") throw new Error("landing.host must be github in pull-request mode");
+			} else if (landing.host !== undefined) throw new Error("landing.host is only valid in pull-request mode");
 			defaultBranch = config.defaultBranch;
 			trackingMode = tracking.mode;
 		} catch (error) {

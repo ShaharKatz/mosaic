@@ -1,5 +1,5 @@
 ---
-description: "Create and commit on target branches, then rebase, fast-forward, push, and remove the branch."
+description: "{{LANDING_DIRECT}}Create and commit on target branches, then rebase, fast-forward, push, and remove the branch.{{/LANDING_DIRECT}}{{LANDING_PULL_REQUEST}}Create and commit on target branches, then rebase, push, open the pull request into {{DEFAULT_BRANCH}}, and remove the branch after the human merges.{{/LANDING_PULL_REQUEST}}"
 ---
 Read when: creating a branch, committing, or landing any change.
 # Git flow
@@ -7,9 +7,17 @@ Read when: creating a branch, committing, or landing any change.
 - One plan has `task/NNNN-<slug>`, matching its filename, created from up-to-date `{{DEFAULT_BRANCH}}` in every targeted repo; R6 in `rule://plan-home` assigns the artifacts to those branches.
 - Commit each completed task in its own repo as `NNNN-T<k>: <summary>`.
 - Never commit on {{DEFAULT_BRANCH}}. The `guard-main` hook blocks the targeted repo's commit, including `git -C <repo>`, `cd <repo> &&` anywhere in the command, `bash -c`, `$(…)`, and heredoc scripts; git aliases and scripts on disk are not inspected.
+{{LANDING_DIRECT}}
 - After sign-off and terminal recording, refresh {{DEFAULT_BRANCH}}, rebase the branch onto its latest tip if it moved (`git rebase {{DEFAULT_BRANCH}} task/NNNN-<slug>`), then `git checkout {{DEFAULT_BRANCH}} && git merge --ff-only task/NNNN-<slug> && git push origin {{DEFAULT_BRANCH}}`; delete the landed branch.
 - The same rebase-first and `--ff-only` sequence lands short-lived inline/docs branches; read `rule://plan-triage` for their names and authorization.
 - A `--no-ff` merge is allowed only for a genuinely complex case, such as preserving a long-lived diverged branch, with the justification recorded in the plan's Execution log.
+{{/LANDING_DIRECT}}
+{{LANDING_PULL_REQUEST}}
+- After sign-off, fetch the up-to-date {{DEFAULT_BRANCH}} (`git fetch origin {{DEFAULT_BRANCH}}`), rebase the branch onto it (`git rebase origin/{{DEFAULT_BRANCH}} <branch>`), and make the first push (`git push -u origin <branch>`). After rebasing an already-pushed branch, use `git push --force-with-lease origin <branch>`; never force a shared or default branch. Open a pull request into {{DEFAULT_BRANCH}} non-interactively (`gh pr create --base {{DEFAULT_BRANCH}} --head <branch> --title "<title>" --body-file <file>`); the body states what changed and why, plus the evidence. Here `<branch>` is the targeted plan, inline, or docs branch. Obtain its locator before terminal records need it; push any subsequent terminal-record changes to the same branch before the merge gate.
+- Wait until every check on the head finishes and require the checks to pass; read every comment, including bots, and resolve requested changes before presenting it for merge. Apply this gate again after any head update. The human merges and chooses the merge method; delete the branch only after landing.
+- Short-lived inline/docs branches follow the same rebase-first, push, pull-request, checks, comments, human-merge, and branch-deletion sequence; read `rule://plan-triage` for their names and authorization.
+- The landing locator in receipts, ledger Landed cells, and gap closures is `pr://<number>`{{TRACKING_LOCAL}}, with `tracker://<key>` beside it when tracked{{/TRACKING_LOCAL}}{{TRACKING_MCP}}, with `tracker://<key>` beside it when tracked{{/TRACKING_MCP}}, never a commit hash: rebase and squash merges rewrite hashes. Committed terminal records carry only the locator, not post-merge proof. To prove landing, resolve the pull request (`gh pr view <number> --json state,mergeCommit`), require state `MERGED` and a merge commit, fetch {{DEFAULT_BRANCH}}, and confirm that resolved commit is reachable (`git merge-base --is-ancestor <mergeCommit.oid> origin/{{DEFAULT_BRANCH}}`). Record the resolved `{repo,ref,commit,reachable:true}` proof with the locator {{TRACKING_NONE}}in the session's report to the human{{/TRACKING_NONE}}{{TRACKING_LOCAL}}in the session's report to the human; write the local tracker's `done` event with locator and proof on the next branch that lands (a docs branch if none is pending), not as an uncommitted post-merge store change{{/TRACKING_LOCAL}}{{TRACKING_MCP}}in the tracker's landing receipt{{/TRACKING_MCP}}; an open pull request is not landing evidence.{{MULTI_REPO}} Open one pull request per targeted repo, including the link repo; retain each repo's locator and landing evidence.{{/MULTI_REPO}}
+{{/LANDING_PULL_REQUEST}}
 - Push every target, including the link repo with remote `{{LINK_REMOTE}}`; {{MEMBERS}}.
-- No PRs; review is in-session via `rule://review-loop`.
+{{LANDING_DIRECT}}- No PRs; review is in-session via `rule://review-loop`.{{/LANDING_DIRECT}}{{LANDING_PULL_REQUEST}}- Task review remains in-session via `rule://review-loop` before the pull request opens; landing follows the checks and human-merge gate above.{{/LANDING_PULL_REQUEST}}
 - Hooks constrain LLM sessions; a human terminal is the escape if one misfires.

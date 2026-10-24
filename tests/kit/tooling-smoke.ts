@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { deepStrictEqual, ok, strictEqual } from "node:assert";
+import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -30,6 +30,73 @@ try {
 		})),
 	}));
 	await install({ manifest, target });
+	const input = JSON.parse(readFileSync(manifest, "utf8"));
+	const markdown = new Map<string, Buffer>();
+	for await (const file of new Bun.Glob("**/*.md").scan({ cwd: target, dot: true, onlyFiles: true })) {
+		markdown.set(file, readFileSync(join(target, file)));
+	}
+	deepStrictEqual(JSON.parse(readFileSync(join(target, ".omp/mosaic.json"), "utf8")).landing, { mode: "direct" });
+	writeFileSync(manifest, JSON.stringify({ ...input, landing: { mode: "direct" } }));
+	await install({ manifest, target });
+	for (const [file, bytes] of markdown) deepStrictEqual(readFileSync(join(target, file)), bytes, file);
+	const directFlow = readFileSync(join(target, "docs/process/git-flow.md"), "utf8");
+	ok(directFlow.includes("git merge --ff-only task/NNNN-<slug>"));
+	ok(directFlow.includes("No PRs; review is in-session"));
+	console.log("PASS landing direct: omitted/explicit metadata and every Markdown byte agree; legacy ff-only flow retained");
+
+	for (const tracking of [{ mode: "none" }, { mode: "local" }, { mode: "mcp", mcp: { server: "issues" } }]) {
+		for (const topology of ["monorepo", "multi-repo"]) {
+			const prTarget = join(scratch, `pr-${tracking.mode}-${topology}`);
+			writeFileSync(manifest, JSON.stringify({
+				...input, tracking, topology, landing: { mode: "pull-request", host: "github" },
+				remotes: { ...input.remotes, members: { api: "https://github.com/example/api.git" } },
+				members: topology === "multi-repo" ? [{ ...input.components[0], name: "api" }] : [],
+			}));
+			await install({ manifest, target: prTarget });
+			const flow = readFileSync(join(prTarget, "docs/process/git-flow.md"), "utf8");
+			for (const passage of ["git rebase origin/master", "git push -u origin <branch>", "git push --force-with-lease origin <branch>",
+				'gh pr create --base master --head <branch> --title "<title>" --body-file <file>',
+				"every check", "every comment", "human merges", "merge method", "delete", "pr://<number>",
+				"gh pr view <number> --json state,mergeCommit", "git merge-base --is-ancestor"]) ok(flow.includes(passage), passage);
+			ok(!flow.includes("No PRs") && !flow.includes("--ff-only"), flow);
+			strictEqual(flow.includes("tracker://<key>"), tracking.mode !== "none");
+			strictEqual(flow.includes("one pull request per targeted repo"), topology === "multi-repo");
+			for (const file of ["docs/process/verification.md", "docs/process/tracker.md", "docs/process/plan-home.md", "docs/product/README.md",
+				".omp/skills/mosaic-gap-audit/SKILL.md", ".claude/skills/mosaic-gap-audit/SKILL.md",
+				".omp/skills/mosaic-execute/SKILL.md", ".claude/skills/mosaic-execute/SKILL.md"]) {
+				const text = readFileSync(join(prTarget, file), "utf8");
+				ok(text.includes(file.startsWith(".claude/") ? "process/git-flow.md" : "rule://git-flow"), file);
+				ok(!text.includes("<landed hash>") && !text.includes("landed hash,") && !text.includes("(<hash>)"), file);
+				ok(!text.includes("--ff-only") && !text.includes("its hash exists"), file);
+			}
+			ok(readFileSync(join(prTarget, "docs/plans/README.md"), "utf8").includes("| Branch | Landed |"));
+			for await (const file of new Bun.Glob("**/*.md").scan({ cwd: prTarget, dot: true, onlyFiles: true })) {
+				ok(!readFileSync(join(prTarget, file), "utf8").includes("{{"), file);
+			}
+			const doctor = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: prTarget, stdout: "pipe", stderr: "pipe" });
+			strictEqual(doctor.exitCode, 0, `${doctor.stdout}\n${doctor.stderr}`);
+			ok(doctor.stdout.toString().includes("doctor: 0 fail, 0 warn, 0 cannot-evaluate"));
+			console.log(`PASS landing pull-request: ${tracking.mode}/${topology}, complete flow, locators, no residue, doctor 0/0/0`);
+		}
+	}
+	const runtimeConfig = JSON.parse(readFileSync(join(target, ".omp/mosaic.json"), "utf8"));
+	for (const [landing, diagnostic] of [
+		[{ mode: "pull-request" }, "landing.host must be github in pull-request mode"],
+		[{ mode: "unknown" }, "landing.mode must be direct or pull-request"],
+		[{ mode: "direct", host: "github" }, "landing.host is only valid in pull-request mode"],
+		[{ mode: "pull-request", host: "other" }, "landing.host must be github in pull-request mode"],
+	] as const) {
+		writeFileSync(manifest, JSON.stringify({ ...input, landing }));
+		await rejects(install({ manifest, target: join(scratch, "invalid-landing") }),
+			(error: Error) => error.message.includes(diagnostic));
+		put(".omp/mosaic.json", JSON.stringify({ ...runtimeConfig, landing }));
+		ok(run([bun, "tools/doctor.ts"], 1).includes(diagnostic), diagnostic);
+	}
+	put(".omp/mosaic.json", JSON.stringify({ ...runtimeConfig, landing: undefined }));
+	run([bun, "tools/doctor.ts"], 0);
+	put(".omp/mosaic.json", `${JSON.stringify(runtimeConfig, null, 2)}\n`);
+	writeFileSync(manifest, JSON.stringify(input));
+	console.log("PASS landing invalid manifests: missing/unsupported host, unknown mode, direct host rejected");
 	run([bun, "tools/doctor.ts"], 0);
 	deepStrictEqual(JSON.parse(run([bun, "tools/checkup.ts", "--json"], 0)), { findings: [], cannotEvaluate: [] });
 	console.log("PASS fresh two-component monorepo: doctor and checkup");
