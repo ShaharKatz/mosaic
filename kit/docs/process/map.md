@@ -13,6 +13,7 @@ Read [the documentation index](../index.md) for project documents and [the archi
 | Reviewers | Independently check the diff and return verdicts as required by the active runtime's review procedure |
 | registry-scout | Filters standing records by scope; returns identifiers and pointers |
 | context-scout | Briefs a code/doc area with concepts, excerpts, and pointers |
+| stack-operator | Runs approved local-stack acceptance scenarios under the project's procedure |
 | Human | Approves plans, signs off results, owns overrides and hook escape decisions |
 ## Lifecycle
 `draft → approved → executing → review → done / abandoned`
@@ -35,6 +36,7 @@ It omits the plan doc and formal planning approvals; read `rule://plan-triage` f
 | Branch, commit, land | `rule://git-flow` |
 | Bound executor work and parallel waves | `rule://dispatch` |
 | Review inputs, verdicts, retries, conflicts | `rule://review-loop` |
+| Local-stack acceptance after task approvals and other Verification, before {{LANDING_PULL_REQUEST}}final review{{/LANDING_PULL_REQUEST}}{{LANDING_DIRECT}}sign-off{{/LANDING_DIRECT}} | `rule://stack-acceptance` |
 {{LANDING_PULL_REQUEST}}
 | Final open-PR review, replay, comments and exact-head CI | `rule://final-review` |
 {{/LANDING_PULL_REQUEST}}

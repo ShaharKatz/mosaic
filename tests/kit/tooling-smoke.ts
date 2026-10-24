@@ -705,6 +705,85 @@ function exerciseReplay(rule: string): void {
 	strictEqual(replay("missing-recorded-base", reviewed, codeBase).kind, "full", "missing recorded base forces full round");
 	console.log("PASS executable replay: unchanged head/rebase/squash empty; own code detected; docs/code conflicts classified; missing base forces full round");
 }
+async function exerciseStackAcceptance(input: Record<string, unknown>): Promise<void> {
+	for (const topology of ["monorepo", "multi-repo"]) for (const mode of ["direct", "pull-request"]) {
+		const fresh = join(scratch, `stack-${topology}-${mode}`);
+		writeFileSync(manifest, JSON.stringify({ ...input, topology,
+			landing: mode === "direct" ? { mode } : { mode, host: "github" },
+			...(topology === "multi-repo" ? {
+				members: [{ name: "member", path: "member", stack: "Example", testCommand: "example-test", coverageNote: "" }],
+				remotes: { link: "https://example.invalid/link.git", members: { member: "https://example.invalid/member.git" } },
+			} : {}),
+		}));
+		await install({ manifest, target: fresh });
+		const file = join(fresh, "docs/process/stack.md");
+		const baseline = readFileSync(file, "utf8").replace(/\n## Local stack\n[\s\S]*/, "");
+		const complete = [
+			"- Bring-up: `example up` from the project root.",
+			"- Stop: `example stop` from the project root.",
+			"- Teardown: `example down` drops local data.",
+			"- Drives: `example smoke` from the project root.",
+			"- Credentials: none needed — reads no credentials or connection overrides.",
+			"- Envelope: none needed — reads no credentials or connection overrides.",
+			"- Coverage check: `example audit-env` inspects stack configuration and host drives.",
+			"- Pre-drive safety check: none needed — isolated local process.",
+		];
+		const cases: [string, string, number][] = [
+			...[
+				["Credentials", "NATS_TOKEN and NATS_URL are read by the local process."],
+				["Bring-up", "nats-server -js"],
+				["Drives", "navigate to http://localhost:3000"],
+				["Stop", "no-op; process exits after drive"],
+				["Teardown", "nothing to tear down because the drive owns no persistent state."],
+			].map(([label, value]): [string, string, number] =>
+				[`valid-word-${label}`, `\n## Local stack\n${complete.map(line =>
+					line.startsWith(`- ${label}:`) ? `- ${label}: ${value}`
+						: label === "Credentials" && line.startsWith("- Envelope:")
+							? "- Envelope: env -u NATS_TOKEN -u NATS_URL covers all credential and connection overrides."
+							: line).join("\n")}\n`, 0]),
+			["comment-only", `\n<!--\n## Local stack\n${complete.join("\n")}\n-->\n`, 1],
+			["fence-only", `\n~~~markdown\n## Local stack\n${complete.join("\n")}\n~~~\n`, 1],
+			["none-with-reason", "\n## Local stack\nnone — no local stack\n", 0],
+			["star-bullets", `\n## Local stack\n${complete.join("\n").replaceAll("- ", "* ")}\n`, 0],
+			...["**", "__"].flatMap(marker => [true, false].map((inside): [string, string, number] =>
+				[`emphasized-label-${marker}-${inside}`, `\n## Local stack\n${complete.join("\n").replace(/^- ([^:]+):/gm,
+					(_match, label: string) => `- ${marker}${label}${inside ? ":" : ""}${marker}${inside ? "" : ":"}`)}\n`, 0])),
+			["fenced-end-heading", `\n## Local stack\n~~~sh\n# Example heading, not a section end\n~~~\n${complete.join("\n")}\n`, 0],
+			["fenced-bullets", `\n## Local stack\n\`\`\`markdown\n${complete.join("\n")}\n\`\`\`\n`, 1],
+			...["n/a", "`n/a`", "na", "no", "not required", "**unknown** — ask human", "**TBD**: ask", "**n/a**, later", "**skip**: ask human", "skip", "-", "—", "?"].map((value): [string, string, number] =>
+				[`unsafe-envelope-${value}`, `\n## Local stack\n${complete.join("\n").replace("Credentials: none needed — reads no credentials or connection overrides.", "Credentials: reads fixture credentials.").replace("Envelope: none needed — reads no credentials or connection overrides.", `Envelope: ${value}`)}\n`, 1]),
+			...["TBD: ask human", "<command>"].map((value): [string, string, number] =>
+				[`placeholder-coverage-${value}`, `\n## Local stack\n${complete.join("\n").replace("Coverage check: `example audit-env` inspects stack configuration and host drives.", `Coverage check: ${value}`)}\n`, 1]),
+			["missing-section", "", 1], ["empty-section", "\n## Local stack\n", 1],
+			["explicit-none", "\n## Local stack\nnone\n", 0],
+			["complete", `\n## Local stack\n${complete.join("\n")}\n`, 0],
+			...complete.map((_, index): [string, string, number] =>
+				[`missing-${index}`, `\n## Local stack\n${complete.filter((_, item) => item !== index).join("\n")}\n`, 1]),
+			...["Credentials", "Envelope", "Pre-drive safety check"].map((label): [string, string, number] =>
+				[`implicit-${label}`, `\n## Local stack\n${complete.join("\n").replace(`${label}: none needed`, `${label}: none`)}\n`, 1]),
+			["credential-without-envelope", `\n## Local stack\n${complete.join("\n").replace("Credentials: none needed — reads no credentials or connection overrides.", "Credentials: reads fixture credentials.")}\n`, 1],
+			["keyless", `\n## Local stack\n${complete.join("\n").replace("Credentials: none needed — reads no credentials or connection overrides.", "Credentials: reads fixture credentials.").replace("Envelope: none needed — reads no credentials or connection overrides.", "Envelope: `env -u EXAMPLE_TOKEN` removes every credential and connection override.")}\n`, 0],
+			["duplicate-credentials-after-exemption", `\n## Local stack\n${complete.join("\n")}\n- Credentials: reads EXAMPLE_TOKEN from the environment.\n`, 1],
+			["duplicate-credentials-other-case", `\n## Local stack\n${complete.join("\n")}\n- credentials: reads EXAMPLE_TOKEN from the environment.\n`, 1],
+			["duplicate-envelope", `\n## Local stack\n${complete.join("\n")}\n- Envelope: none needed — second declaration.\n`, 1],
+		];
+		const failures: string[] = [];
+		for (const [scenario, section, code] of cases) {
+			writeFileSync(file, baseline + section);
+			const result = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+			const valid = result.exitCode === code && (code === 0
+				? result.stdout.toString() === "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n"
+				: result.stdout.toString().includes("FAIL stack-acceptance docs/process/stack.md:"));
+			if (!valid) {
+				const failure = `${topology}/${mode}/${scenario}: expected ${code}, got ${result.exitCode}\n${result.stdout}\n${result.stderr}`;
+				console.log(`FAIL ${failure}`);
+				failures.push(failure);
+			}
+		}
+		deepStrictEqual(failures, []);
+		console.log(`PASS stack acceptance ${topology}/${mode}: none, complete, keyless and missing/unsafe declarations`);
+	}
+}
 try {
 	writeFileSync(manifest, JSON.stringify({
 		project: { name: "Monorepo", summary: "Monorepo contains an API and worker." },
@@ -717,6 +796,7 @@ try {
 	}));
 	await install({ manifest, target });
 	const input = JSON.parse(readFileSync(manifest, "utf8"));
+	await exerciseStackAcceptance(input);
 	await exerciseBraceScope(input);
 	await exerciseFinalReviewRegressions(input);
 	await exerciseStandards(input);

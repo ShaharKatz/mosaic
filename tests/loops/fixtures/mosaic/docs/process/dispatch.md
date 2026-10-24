@@ -9,6 +9,7 @@ The role is fixed by the phase, not by the kind of file touched; task class sele
 | Planning (`/mosaic-plan`) | orchestrator drafts; `context-scout`/`registry-scout`/`tracker-scout` read | executor, reviewers |
 | Task implementation (`/mosaic-execute` steps 3–4) | `executor` per task (code, tests, or documents alike); reviewers per task class below | orchestrator editing task files |
 | REVISE repair | `executor` re-dispatched with the findings, or the orchestrator for a mechanical correction (read `rule://review-loop`) | reviewers editing |
+| Verification (`/mosaic-execute` step 5) | orchestrator runs Verification; `stack-operator` runs scenarios under `rule://stack-acceptance` | executor except a REVISE repair |
 | Close-out (`/mosaic-execute` steps 7–9) | orchestrator writes dispositions, the Execution log, and mechanical corrections; `librarian` proposes doc alignment; both reviewers review the closure packet | `executor` (except a REVISE repair of a plan task) |
 | Landing and registry sync (`/mosaic-execute` steps 10–13) | orchestrator | agents |
 # Task contract

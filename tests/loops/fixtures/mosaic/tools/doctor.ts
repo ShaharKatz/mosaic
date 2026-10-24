@@ -252,7 +252,7 @@ if (standards.some(standard => standard.name === "pr-evidence") && typeof Bun.ma
 const processNames = [
 	"mosaic-core", "map", "plan-triage", "git-flow", "dispatch", "review-loop", "verification",
 	"records", "registries", "plan-home", "stack", "human-gates", "writing-for-the-reader",
-	"targeted-tests", "records-guard", "model-notes", "intake", "tracker",
+	"targeted-tests", "records-guard", "model-notes", "intake", "tracker", "stack-acceptance",
 ];
 if (pullRequestMode) processNames.push("final-review", "stacked-prs");
 for (const file of ["docs/process/stacked-prs.md", ".omp/rules/stacked-prs.md", "tools/stack-base.ts", "tools/constants/stack-base.ts"]) {
@@ -266,6 +266,7 @@ const agentPairs = [
 	["executor", "executor"], ["plan-adversary", "plan-adversary"], ["registry-scout", "registry-scout"],
 	["context-scout", "context-scout"], ["claude-reviewer", "reviewer"], ["gpt-reviewer", "reviewer"],
 	["tracker-scout", "tracker-scout"], ["librarian", "librarian"], ["ticket-investigator", "ticket-investigator"],
+	["stack-operator", "stack-operator"],
 ];
 const installedAgentPairs = agentPairs.filter(([name]) => name !== "tracker-scout" || trackingMode === "local");
 if (diagramsOn) installedAgentPairs.push(["diagram-keeper", "diagram-keeper"]);
@@ -312,6 +313,59 @@ for (const [file, max] of budgets) {
 	if (content === undefined) continue;
 	const count = lines(body(content)).length;
 	if (count > max) finding("FAIL", "budgets", file, `${count} body lines exceeds ${max}`);
+}
+
+// Inspect declarations only: never execute a project's commands or import its tools.
+const stackFile = "docs/process/stack.md";
+const stackText = text("stack-acceptance", stackFile);
+if (stackText !== undefined) {
+	let fence: { marker: string; length: number } | undefined;
+	const active = stackText.replace(/<!--[\s\S]*?(?:-->|$)/g, "").split("\n").map(line => {
+		const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+		if (fence) {
+			if (marker?.[1]?.[0] === fence.marker && marker[1].length >= fence.length && !marker[2]?.trim()) fence = undefined;
+			return "";
+		}
+		if (marker) {
+			fence = { marker: marker[1]![0]!, length: marker[1]!.length };
+			return "";
+		}
+		return line;
+	}).join("\n");
+	const content = active.match(/^## Local stack[ \t]*\n([\s\S]*)/m)?.[1]?.split(/^#{1,2} /m)[0]?.trim();
+	if (!content) finding("FAIL", "stack-acceptance", stackFile, "Local stack section must explicitly declare none or a complete procedure");
+	else if (!/^none(?: — \S.*)?$/.test(content)) {
+		const required = ["Bring-up", "Stop", "Teardown", "Drives", "Credentials", "Envelope", "Coverage check", "Pre-drive safety check"];
+		const values = new Map<string, string>();
+		// ASCII hyphens/underscores remain word characters for commands and variable names.
+		const placeholder = /^(?:none|n\/?a|not|no|unknown|pending|tbd|todo|skip)(?=$|[\s:;,.—])|^[-—?<]/i;
+		const declarations = content.split("\n").map(line => line
+			.replace(/^([-*] )(\*\*|__)([^:]+:)\2(?=\s|$)/, "$1$3")
+			.replace(/^([-*] )(\*\*|__)([^:]+)\2:/, "$1$3:"));
+		for (const label of required) {
+			// Labels match case-insensitively so a second spelling can't slip past the single-declaration rule.
+			const matches = declarations.filter(line => /^[-*] /.test(line)
+				&& line.slice(2).toLowerCase().startsWith(`${label.toLowerCase()}:`));
+			if (matches.length > 1) {
+				finding("FAIL", "stack-acceptance", stackFile, `${label} is declared ${matches.length} times; keep exactly one declaration`);
+				continue;
+			}
+			const value = matches[0]
+				?.slice(label.length + 3).trim().replace(/^([*_]+)(.*?)\1(?=[^*_]|$)/, "$2")
+				.replace(/^[*_]+/, "").replace(/^`([^`]+)`/, "$1").trim();
+			if (!value || placeholder.test(value) && !/^none needed — \S/.test(value)) {
+				finding("FAIL", "stack-acceptance", stackFile, `${label} requires a command/procedure or explicit none needed — reason`);
+			} else values.set(label, value);
+		}
+		for (const label of ["Bring-up", "Stop", "Teardown", "Drives", "Coverage check"]) {
+			if (values.get(label)?.startsWith("none needed")) finding("FAIL", "stack-acceptance", stackFile, `${label} requires a concrete procedure`);
+		}
+		const credentials = values.get("Credentials");
+		const envelope = values.get("Envelope");
+		if (envelope?.startsWith("none needed") && !credentials?.startsWith("none needed")) {
+			finding("FAIL", "stack-acceptance", stackFile, "Envelope is required when credentials or connection overrides are read");
+		}
+	}
 }
 
 // A missing reference target is a failure; an unreadable source cannot be evaluated.

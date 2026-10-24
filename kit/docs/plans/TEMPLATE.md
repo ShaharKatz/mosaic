@@ -87,6 +87,10 @@ The Architecture delta matches `bun tools/diagram-delta.ts compare <plan> <base 
 Read `rule://verification`; list runnable checks and expected evidence.
 For negative probes, follow that rule's reject, revert, and rebuild sequence.
 
+### Stack acceptance
+
+Read `rule://stack-acceptance`: `stack: none — <reason>`, or the smallest stack and scenarios (`S<k>`: proves, `exercises:`, drive, passing observation, edge cases and why). If the project's Local stack says `none`, declare `stack: none — no local stack`.
+
 ### Unverified
 
 Evidence limits and alternatives, per `rule://verification`.
@@ -106,6 +110,7 @@ the human's disposition. A waived debate records the waiver (who, why) instead. 
 Filled during execution: task → agent → result; reviewer verdicts; deviations from plan and why;
 final verification output.
 Log per `rule://review-loop`: one verdict per task/reviewer/round, followed by its findings.
+Stack scenarios log per `rule://stack-acceptance`.
 ```text
 - <task> R<round> <reviewer>: APPROVE|REVISE (<n> findings)
 - <task> R<round> <reviewer>: <S|P> — <finding in ≤ 15 words> → <fixed|rejected: reason|deferred: where>

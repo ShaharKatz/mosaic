@@ -53,6 +53,10 @@ Concrete checks the reviewer runs against the diff, including the relevant pitfa
 Read `rule://verification`; list runnable checks and expected evidence.
 For negative probes, follow that rule's reject, revert, and rebuild sequence.
 
+### Stack acceptance
+
+Read `rule://stack-acceptance`: `stack: none — no local stack`.
+
 ### Unverified
 
 Evidence limits and alternatives, per `rule://verification`.
@@ -72,6 +76,7 @@ the human's disposition. A waived debate records the waiver (who, why) instead. 
 Filled during execution: task → agent → result; reviewer verdicts; deviations from plan and why;
 final verification output.
 Log per `rule://review-loop`: one verdict per task/reviewer/round, followed by its findings.
+Stack scenarios log per `rule://stack-acceptance`.
 ```text
 - <task> R<round> <reviewer>: APPROVE|REVISE (<n> findings)
 - <task> R<round> <reviewer>: <S|P> — <finding in ≤ 15 words> → <fixed|rejected: reason|deferred: where>

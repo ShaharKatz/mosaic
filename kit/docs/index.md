@@ -39,6 +39,8 @@
 | [final-review](process/final-review.md) | Open-PR final review, replay, comments and exact-head CI | PR opens, head changes, readiness or merge |
 {{/LANDING_PULL_REQUEST}}
 | [verification](process/verification.md) | Evidence and registry lifecycle | Writing/running verification or interpreting a failure |
+| [stack-acceptance](process/stack-acceptance.md) | Local-stack scenarios, keyless envelope and safety gates | Writing or running plan Verification |
+| `stack-operator` | Runs approved acceptance scenarios using the project's Local stack procedure | Local-stack acceptance |
 | [records](process/records.md) | Doc classes, routing, schemas | Editing a governed file |
 | [registries](process/registries.md) | Scope-based reading | Checking records or unfamiliar areas |
 | [plan-home](process/plan-home.md) | Homes, numbering, ledgers, paths | Preparing a plan or syncing status |

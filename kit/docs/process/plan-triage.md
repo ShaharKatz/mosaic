@@ -22,9 +22,10 @@ Say which lighter procedure applies; do not author a plan from habit. Small impl
 ## Light-path records and early exits
 - Present finished work. For a choice owned by the human or ticket reporter, state the chosen default and its implications.
 - No plan doc, Planning log, formal approval ceremony, ledger row, or number by default; record the decision on the branch.
+- Read `rule://stack-acceptance` for light-path local-stack triggers, safety and evidence.
 - Claim a number and row only at close if the outcome leaves a decision worth auditing or the human directs it; the docless row carries the full scope. Read `rule://plan-home` for the ledger contract; eager reservation applies only to authored plans.
 - Early exits are self-serve: note the one-line reason in the commit, without a human waiver or Planning-log entry.
-- No decision surface to challenge → skip the adversary; negligible change since the last review or challenge round → convergence; reviewer-clean → land {{LANDING_DIRECT}}immediately {{/LANDING_DIRECT}}per `rule://review-loop`.{{LANDING_PULL_REQUEST}} Code-bearing light work first passes `rule://final-review` on the open PR; inline/docs-only work records its exemption but still completes that rule's comments and CI gate.{{/LANDING_PULL_REQUEST}}
+- No decision surface to challenge → skip the adversary; negligible change since the last review or challenge round → convergence; reviewer-clean, with any required stack acceptance passed on that head → land {{LANDING_DIRECT}}immediately {{/LANDING_DIRECT}}per `rule://review-loop`.{{LANDING_PULL_REQUEST}} Code-bearing light work first passes `rule://final-review` on the open PR; inline/docs-only work records its exemption but still completes that rule's comments and CI gate.{{/LANDING_PULL_REQUEST}}
 - Full planning uses its own recorded breaks and human-granted waiver; read `skill://mosaic-plan`.
 ## Data-only ingestion
 Information added without acting on code or behavior—product/external notes, concepts, ideation—gets no plan, ledger row, or agent dispatch.

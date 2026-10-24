@@ -312,6 +312,19 @@ are no-ops. `--overlay <dir>` replaces same-path files in full after rendering, 
 rendering the overlay. Unrelated files are preserved, and symlinked destination directories are
 refused. `--force` replaces bytes; it is not an existing-project migration or an upgrade strategy.
 
+### Local-stack acceptance (always installed)
+
+Every new plan declares scenarios or `stack: none — <reason>`. The rule and acceptance-only
+`stack-operator` twins are always installed: the no-stack case is explicit, not an opt-in.
+The project owns **Local stack** in `docs/process/stack.md`, not manifest fields.
+The starter says `none`; `/mosaic-install` must confirm that from the survey or replace it
+with bring-up/stop/teardown commands and cwd, drives, credential reads, envelope prefix,
+coverage check and pre-drive safety check. Mark unknowns for the human; never invent commands.
+Whenever any credential or connection override is read, require the keyless envelope;
+`none needed — <reason>` is explicit, never a default. External writes need a named,
+human-approved plan line. Acceptance runs before final review in pull-request mode,
+before sign-off in direct mode. Doctor checks declarations only and never executes them.
+
 ### Local tools
 
 Run these from the installed project root:

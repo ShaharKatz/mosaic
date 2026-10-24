@@ -28,6 +28,8 @@
 | [dispatch](process/dispatch.md) | Bounded task and parallel ownership | Authoring tasks or dispatching executors |
 | [review-loop](process/review-loop.md) | Verdicts and correction cycle | Reviewing tasks or findings |
 | [verification](process/verification.md) | Evidence and registry lifecycle | Writing/running verification or interpreting a failure |
+| [stack-acceptance](process/stack-acceptance.md) | Local-stack scenarios, keyless envelope and safety gates | Writing or running plan Verification |
+| `stack-operator` | Runs approved acceptance scenarios using the project's Local stack procedure | Local-stack acceptance |
 | [records](process/records.md) | Doc classes, routing, schemas | Editing a governed file |
 | [registries](process/registries.md) | Scope-based reading | Checking records or unfamiliar areas |
 | [plan-home](process/plan-home.md) | Homes, numbering, ledgers, paths | Preparing a plan or syncing status |
