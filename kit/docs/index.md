@@ -30,6 +30,9 @@
 | [intake](process/intake.md) | Request evidence, risk, and proposed dispositions | Investigating an external request |
 | [tracker](process/tracker.md) | Installed tracking mode, coordination authority, writer discipline, and operations | Intent, collision checks, intake writeback, lifecycle events |
 | [git-flow](process/git-flow.md) | Target-repo branch and landing commands | Branching, committing, landing |
+{{LANDING_PULL_REQUEST}}
+| [stacked-prs](process/stacked-prs.md) | Repository base declarations and read-only stack resolver | A parent branch changes or lands; before review, squash, push, landing |
+{{/LANDING_PULL_REQUEST}}
 | [dispatch](process/dispatch.md) | Bounded task and parallel ownership | Authoring tasks or dispatching executors |
 | [review-loop](process/review-loop.md) | Verdicts and correction cycle | Reviewing tasks or findings |
 {{LANDING_PULL_REQUEST}}

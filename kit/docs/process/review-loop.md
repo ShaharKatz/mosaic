@@ -5,6 +5,9 @@ Read when: a task or parallel wave is ready for review, or a reviewer returns fi
 # Review inputs
 - Give each reviewer the plan path (or in-memory task for the light path), target repo paths, branch name and its `<base sha>`, and tasks under review; include the Review checklist and the pitfall catalogs of every touched repo and the link ([pitfalls.md](../architecture/pitfalls.md){{MULTI_REPO}}, `<member>/docs/pitfalls.md`{{/MULTI_REPO}}). `<base sha>` is the sha of the fetched base ref named in the dispatch (`{{DEFAULT_BRANCH}}`'s unless the dispatch says otherwise); pin the sha, never the ref name, which can move during review.
 - Commit the work under review first: `git diff <base sha>...<branch>` excludes uncommitted edits, so an uncommitted task shows the reviewer an empty diff. Then review `git -C <repo> diff <base sha>...<branch>` separately in each repo, including untracked additions (`git status --porcelain`); what lands must be the reviewed snapshot.
+{{LANDING_PULL_REQUEST}}
+- Resolve each target under `rule://stacked-prs` before review and require `action=none`. Dispatch a repository-to-`base_sha` mapping from these evaluations, not a shared SHA or movable ref. These tokens are defined in `rule://git-flow`; an open parent's `none` permits review, not landing.
+{{/LANDING_PULL_REQUEST}}
 - Read `rule://registries` for challenger reading and [targeted-tests](targeted-tests.md) (loaded automatically inside executor and reviewer agents; the main session reads the file) for review-time checks.
 {{LANDING_PULL_REQUEST}}
 - Once the PR opens, apply `rule://final-review` for code-bearing work and every PR's comments and exact-head CI; route final findings and comment repairs together through this loop.

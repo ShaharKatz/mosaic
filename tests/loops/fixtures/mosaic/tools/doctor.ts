@@ -95,7 +95,7 @@ let trackingMode = "none";
 type Standard = { name: string; paths: string[]; dir?: string; designSystem?: string };
 let standards: Standard[] = [];
 let repositories: { name: string; path: string; remote: string }[] = [];
-let landingMode = "direct";
+let pullRequestMode = false;
 let diagramsOn = false;
 let diagramsRoot = "";
 if (fs.existsSync(path.join(root, configPath))) {
@@ -126,17 +126,6 @@ if (fs.existsSync(path.join(root, configPath))) {
 			if (landing.closeOut !== undefined) {
 				if (landing.mode !== "pull-request") throw new Error("landing.closeOut is only valid in pull-request mode");
 				if (landing.closeOut !== "two-commit") throw new Error("landing.closeOut must be two-commit");
-			}
-			if (config.repositories !== undefined) {
-				if (!Array.isArray(config.repositories)) throw new Error("repositories must be an array");
-				for (const repo of config.repositories) {
-					if (!repo || ["name", "path", "remote"].some(field => typeof repo[field] !== "string" || !repo[field].trim()
-						|| /[\r\n\0]/.test(repo[field]))) throw new Error("repositories entries require single-line name, path, and remote");
-					if (path.isAbsolute(repo.path) || repo.path.includes("\\") || repo.path.split("/").includes("..")) {
-						throw new Error("repositories paths must stay within the installation root");
-					}
-				}
-				repositories = config.repositories;
 			}
 			if (config.standards !== undefined) {
 				if (!Array.isArray(config.standards)) throw new Error("standards must be an array");
@@ -209,9 +198,26 @@ if (fs.existsSync(path.join(root, configPath))) {
 					}
 				}
 			}
+			pullRequestMode = landing.mode === "pull-request";
+			if ((pullRequestMode || standards.length) && (!Array.isArray(config.repositories) || !config.repositories.length)) {
+				throw new Error(pullRequestMode ? "repositories must be a nonempty list in pull-request mode" : "repositories must be a nonempty list when standards are selected");
+			}
+			if (config.repositories !== undefined) {
+				if (!Array.isArray(config.repositories)) throw new Error("repositories must be an array");
+				const names = new Set<string>();
+				const paths = new Set<string>();
+				for (const repo of config.repositories) {
+					if (!repo || typeof repo.name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(repo.name) || names.has(repo.name)
+						|| typeof repo.path !== "string" || !repo.path || /[\r\n\0\\]/.test(repo.path) || path.isAbsolute(repo.path) || repo.path.split("/").includes("..") || paths.has(repo.path)
+						|| typeof repo.remote !== "string" || !repo.remote.trim() || /[\r\n\0]/.test(repo.remote)) throw new Error("invalid repositories metadata");
+					names.add(repo.name); paths.add(repo.path);
+				}
+				if (!config.repositories.length || config.repositories[0].name !== "link-repo" || config.repositories[0].path !== "."
+					|| (config.topology === "monorepo" && config.repositories.length !== 1)) throw new Error("repositories do not match topology");
+				repositories = config.repositories;
+			}
 			defaultBranch = config.defaultBranch;
 			trackingMode = tracking.mode;
-			landingMode = landing.mode;
 		} catch (error) {
 			finding("FAIL", "mosaic-config", configPath, String(error));
 		}
@@ -248,7 +254,11 @@ const processNames = [
 	"records", "registries", "plan-home", "stack", "human-gates", "writing-for-the-reader",
 	"targeted-tests", "records-guard", "model-notes", "intake", "tracker",
 ];
-if (landingMode === "pull-request") processNames.push("final-review");
+if (pullRequestMode) processNames.push("final-review", "stacked-prs");
+for (const file of ["docs/process/stacked-prs.md", ".omp/rules/stacked-prs.md", "tools/stack-base.ts", "tools/constants/stack-base.ts"]) {
+	const present = fs.existsSync(path.join(root, file));
+	if (present !== pullRequestMode) finding(pullRequestMode ? "FAIL" : "WARN", "mosaic-config", file, pullRequestMode ? "required in pull-request mode" : "not installed by direct mode; preserve project-owned content");
+}
 if (diagramsOn) processNames.push("diagrams");
 const skillNames = ["mosaic-plan", "mosaic-execute", "mosaic-gap-audit", "mosaic-intake", "mosaic-checkup", "mosaic-kit"];
 if (diagramsOn) skillNames.push("diagrams");

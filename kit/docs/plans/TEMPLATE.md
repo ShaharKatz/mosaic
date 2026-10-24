@@ -5,6 +5,10 @@ status: draft        # draft | approved | executing | review | done | abandoned
 created: YYYY-MM-DD
 repo: {{MEMBERS}}       # {{MULTI_REPO}}{{MEMBERS}} | link-repo; one member ⇒ home there; link-repo or multiple ⇒ home in link repo{{/MULTI_REPO}}{{MONOREPO}}every plan is link-homed, including single-component work{{/MONOREPO}}
 branch: task/NNNN-<slug>
+{{LANDING_PULL_REQUEST}}
+bases:               # exactly the repositories carrying this branch; cross-repo includes link-repo
+  {{MEMBERS}}: { base: {{DEFAULT_BRANCH_YAML}}, base-pr: null }
+{{/LANDING_PULL_REQUEST}}
 {{TRACKING_LOCAL}}
 tracker:
   provider: replay

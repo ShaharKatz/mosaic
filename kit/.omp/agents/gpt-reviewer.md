@@ -12,6 +12,9 @@ Review independently: do not coordinate with or wait for another reviewer. Verif
 - Plan path: read Review checklist, Task breakdown, and acceptance criteria.
 - Branch or explicit diff/file list; tasks under review; target repo paths.
 - Read `rule://review-loop` for the review snapshot; inspect each target with `git -C <repo> diff <base sha>...<branch>` and `git -C <repo> status --porcelain`. `<base sha>` is the sha of the fetched base ref named in the dispatch (`{{DEFAULT_BRANCH}}`'s unless the dispatch says otherwise); use the sha, never the ref name, which can move during review.
+{{LANDING_PULL_REQUEST}}
+- Use the selected repository's pinned `base_sha` from the dispatched repository-to-SHA mapping; `rule://git-flow` defines the tokens. Never substitute another repository's base or a movable ref.
+{{/LANDING_PULL_REQUEST}}
 
 ## Checks
 1. Scope: any changed file outside the reviewed tasks' `files:` is an `S` finding (REVISE).

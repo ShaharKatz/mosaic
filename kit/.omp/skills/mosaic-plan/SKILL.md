@@ -16,6 +16,9 @@ Planning runs at maximum effort. Use the configured planning role; if that role 
 3. Read `rule://records`; read `rule://plan-home`; read `rule://git-flow`.
    Reserve the number under `rule://plan-home` R2. This is the row Phase 3 will update.
 4. Read `rule://plan-home`; read `rule://tracker`. Copy the link repo's `docs/plans/TEMPLATE.md` to `<home>/docs/plans/NNNN-<slug>.md`; create its `docs/plans/` directory on first use. Fill today's date, title, number, `status: draft`, target `repo:` list, branch, and `areas:`; handle tracking metadata and binding the plan to intent only as the installed mode requires. Preserve collision evidence and any unsent events under that rule. Use `rule://plan-home` R5/R8 for task paths and prose links.
+{{LANDING_PULL_REQUEST}}
+   Read `rule://stacked-prs`. Fill one `bases` map entry for every branched Git repository (including `link-repo` for cross-repo plans), with the default branch and null `base-pr`, or that repository's parent branch and PR number. No scalar declaration or member copy of the plan.
+{{/LANDING_PULL_REQUEST}}
 5. Read `rule://registries`. Research unfamiliar areas with `context-scout` via `task`, then read the element docs its brief identifies. Send the proposed scope to `registry-scout` via `task` for the pitfall catalogs of every targeted repo and the link, active gaps, and related plans.
    - If the idea trips a flagged pitfall, stop and tell the human.
    - Read `rule://records`. A record the plan intends to produce (a pitfall, an obligation, an element-doc sentence) is stated in Context by content — trap and prevention, trigger and duty, the sentence — with its catalog or doc and no number; the number is allocated at close-out.

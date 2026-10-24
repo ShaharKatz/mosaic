@@ -221,6 +221,7 @@ function render(content: string, file: string, manifest: Manifest): string {
       case "PROJECT_SUMMARY": return manifest.project.summary;
       case "LINK_REMOTE": return manifest.remotes.link;
       case "DEFAULT_BRANCH": return manifest.git.defaultBranch;
+      case "DEFAULT_BRANCH_YAML": return JSON.stringify(manifest.git.defaultBranch);
       case "TRACKING": return manifest.tracking.mode;
       case "MCP_SERVER": return manifest.tracking.mcp?.server ?? "";
       case "MCP_TEAM": return manifest.tracking.mcp?.team ?? "not configured; resolve the target team before creating intent";
@@ -355,6 +356,10 @@ export async function install(options: { manifest: string; target: string; kit?:
       console.log(`Preserving project-owned pull request templates: ${templates.join(", ")}. Merge the ## Evidence section from the kit template; --force never replaces project templates.`);
     }
   }
+  if (manifest.landing.mode === "direct") {
+    for (const name of ["docs/process/stacked-prs.md", ".omp/rules/stacked-prs.md", "tools/stack-base.ts", "tools/constants/stack-base.ts"]) entries.delete(name);
+    if (manifest.diagrams?.mode !== "drawio") entries.delete("tools/constants");
+  }
   const config = entries.get(".omp/mosaic.json");
   if (config?.kind === "file") {
     let commit = options.kitCommit;
@@ -364,11 +369,10 @@ export async function install(options: { manifest: string; target: string; kit?:
     }
     config.content = Buffer.from(`${JSON.stringify({
       defaultBranch: manifest.git.defaultBranch, topology: manifest.topology, tracking: manifest.tracking, landing: manifest.landing, kit: { commit },
-      ...(manifest.standards?.length ? { standards: manifest.standards, repositories: [
+      ...(manifest.standards?.length ? { standards: manifest.standards } : {}),
+      ...(manifest.landing.mode === "pull-request" || manifest.standards?.length ? { repositories: [
         { name: "link-repo", path: ".", remote: manifest.remotes.link },
-        ...(manifest.topology === "multi-repo" ? manifest.members.map(member => ({
-          name: member.name, path: member.path, remote: manifest.remotes.members[member.name],
-        })) : []),
+        ...(manifest.topology === "multi-repo" ? manifest.members.map(member => ({ name: member.name, path: member.path.replace(/\/+$/, ""), remote: manifest.remotes.members[member.name] })) : []),
       ] } : {}),
       ...(manifest.diagrams?.mode === "drawio" ? { diagrams: { mode: "drawio", root: manifest.diagrams.root,
         components: (manifest.topology === "monorepo" ? manifest.components : manifest.members).map(member => member.path.replace(/\/+$/, "")) } } : {}),

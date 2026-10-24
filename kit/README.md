@@ -323,6 +323,7 @@ Run these from the installed project root:
 | `bun tools/docimpact.ts <plan-path>` | Document-impact candidates to inspect, not automatic edit instructions |
 | `bun tools/guard-main.ts` | Shared commit-target resolver for both guard adapters; JSON stdin → target path or `SKIP`; `--hook` checks Claude hook payloads |
 | `tools/tracker.ts` (`local` only) | Offline inventory/intent operations; commands and safety gates live in the [tracker rule](docs/process/tracker.md) |
+| `bun tools/stack-base.ts --repo <name> [--plan <path>]` (pull-request only) | Read-only repository-scoped stacked-base resolution; [procedure](docs/process/stacked-prs.md), ordered protocol and exit contract |
 | `bun .omp/hooks/post/lint-ledgers.ts <path>` | Governed registry/plan lint when using omp |
 | `bash .claude/hooks/lint-ledgers.sh <path>` | Governed registry/plan lint when using Claude Code |
 

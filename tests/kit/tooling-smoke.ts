@@ -928,6 +928,46 @@ try {
 		writeFileSync(manifest, JSON.stringify({ ...input, diagrams }));
 		await rejects(install({ manifest, target: join(scratch, "invalid-diagrams") }));
 	}
+	for (const topology of ["monorepo", "multi-repo"]) {
+		for (const selection of ["pull-request+standards", "direct+standards", "direct+none"]) {
+			const fresh = join(scratch, `integration-${topology}-${selection}`);
+			const selected = selection.endsWith("+standards");
+			const pullRequest = selection.startsWith("pull-request");
+			const member = { ...input.components[0], name: "api" };
+			const remotes = { ...input.remotes, members: { api: "https://github.com/example/api.git" } };
+			const standards = selected ? [{ name: "testing", paths: ["src/**/*.ts"] }] : [];
+			writeFileSync(manifest, JSON.stringify({ ...input, topology, remotes, standards,
+				members: topology === "multi-repo" ? [member] : [],
+				landing: pullRequest ? { mode: "pull-request", host: "github" } : { mode: "direct" },
+			}));
+			await install({ manifest, target: fresh });
+			mkdirSync(join(fresh, "src")); writeFileSync(join(fresh, "src/example.ts"), "export const example = true;\n");
+			if (topology === "multi-repo") mkdirSync(join(fresh, member.path), { recursive: true });
+			for (const repo of [fresh, ...(topology === "multi-repo" ? [join(fresh, member.path)] : [])]) {
+				const init = Bun.spawnSync(["git", "init", "--initial-branch=main"], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+				strictEqual(init.exitCode, 0, init.stderr.toString());
+			}
+			const metadataPath = join(fresh, ".omp/mosaic.json");
+			const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+			deepStrictEqual(metadata.repositories, selected || pullRequest ? [
+				{ name: "link-repo", path: ".", remote: remotes.link },
+				...(topology === "multi-repo" ? [{ name: "api", path: member.path, remote: remotes.members.api }] : []),
+			] : undefined);
+			deepStrictEqual(metadata.standards, selected ? standards : undefined);
+			strictEqual(existsSync(join(fresh, "tools/stack-base.ts")), pullRequest);
+			strictEqual(existsSync(join(fresh, "docs/standards/testing.md")), selected);
+			const doctor = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+			strictEqual(doctor.exitCode, 0, `${doctor.stdout}\n${doctor.stderr}`);
+			strictEqual(doctor.stdout.toString(), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+			if (selected) {
+				delete metadata.repositories; writeFileSync(metadataPath, JSON.stringify(metadata));
+				const missing = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+				strictEqual(missing.exitCode, 1, `${missing.stdout}\n${missing.stderr}`);
+				ok(missing.stdout.toString().includes("repositories must be a nonempty list"));
+			}
+			console.log(`PASS shared repository metadata: ${selection}/${topology}, selected behaviours retained, doctor 0/0/0`);
+		}
+	}
 	for (const tracking of [{ mode: "none" }, { mode: "local" }, { mode: "mcp", mcp: { server: "issues" } }]) {
 		for (const topology of ["monorepo", "multi-repo"]) {
 			const prTarget = join(scratch, `pr-${tracking.mode}-${topology}`);
@@ -938,6 +978,15 @@ try {
 			}));
 			await install({ manifest, target: prTarget });
 			for (const file of [...BUNDLE_FILES, DIAGRAMS_ROOT, ".mcp.json"]) ok(!existsSync(join(prTarget, file)), `off ${tracking.mode}/${topology} omits ${file}`);
+			const stackConfig = JSON.parse(readFileSync(join(prTarget, ".omp/mosaic.json"), "utf8"));
+			deepStrictEqual(stackConfig.repositories, [
+				{ name: "link-repo", path: ".", remote: input.remotes.link },
+				...(topology === "multi-repo" ? [{ name: "api", path: input.components[0].path, remote: "https://github.com/example/api.git" }] : []),
+			]);
+			const template = readFileSync(join(prTarget, "docs/plans/TEMPLATE.md"), "utf8").split("---")[1]!;
+			const fields = Bun.YAML.parse(template) as { bases: Record<string, { base: string; "base-pr": null }> };
+			deepStrictEqual(fields.bases, { [topology === "monorepo" ? "link-repo" : "api"]: { base: "master", "base-pr": null } });
+			for (const file of ["docs/process/stacked-prs.md", ".omp/rules/stacked-prs.md", "tools/stack-base.ts", "tools/constants/stack-base.ts"]) ok(existsSync(join(prTarget, file)), file);
 			const flow = readFileSync(join(prTarget, "docs/process/git-flow.md"), "utf8");
 			ok(existsSync(join(prTarget, "docs/process/final-review.md")), "pull-request installs final-review rule");
 			const rule = readFileSync(join(prTarget, "docs/process/final-review.md"), "utf8");
@@ -949,10 +998,10 @@ try {
 				ok(readFileSync(join(prTarget, caller), "utf8").includes(caller.startsWith(".claude/") ? "docs/process/final-review.md" : "rule://final-review"), caller);
 			}
 			if (tracking.mode === "none" && topology === "monorepo") exerciseReplay(rule);
-			for (const passage of ["git rebase origin/master", "git push -u origin <branch>", "git push --force-with-lease origin <branch>",
-				'gh pr create --base master --head <branch> --title "<title>" --body-file <file>',
-				"every check", "every comment", "human merges", "merge method", "delete", "pr://<number>",
-				"gh pr view <number> --json state,mergeCommit", "git merge-base --is-ancestor"]) ok(flow.includes(passage), passage);
+			ok(flow.includes('gh pr create --base <base> --head <branch> --title "<title>" --body-file <file>'), "PR creation stays non-interactive and names its head");
+			ok(flow.includes("After rebasing an already-pushed branch, use `git push --force-with-lease origin <branch>`"), "rebased published history uses a lease");
+			ok(flow.includes("`pr://<number>`") && flow.includes("gh pr view <number> --json state,mergeCommit")
+				&& flow.includes("git merge-base --is-ancestor <mergeCommit.oid> origin/master"), "landing locator requires fetched merge-commit reachability");
 			ok(!flow.includes("No PRs") && !flow.includes("--ff-only"), flow);
 			ok(!flow.includes("reset --soft"), "unconfigured pull-request retains unsquashed layout");
 			strictEqual(flow.includes("tracker://<key>"), tracking.mode !== "none");
@@ -1075,10 +1124,54 @@ try {
 	strictEqual(compatibilityDoctor.exitCode, 0, `${compatibilityDoctor.stdout}\n${compatibilityDoctor.stderr}`);
 	ok(compatibilityDoctor.stdout.toString().includes("doctor: 0 fail, 0 warn, 0 cannot-evaluate"));
 	console.log("PASS close-out compatibility: pull-request metadata without closeOut accepted");
+	put(".omp/mosaic.json", JSON.stringify({ ...runtimeConfig, landing: { mode: "pull-request", host: "github" } }));
+	ok(run([bun, "tools/doctor.ts"], 2).includes("repositories must be a nonempty list in pull-request mode"));
+	console.log("PASS stack metadata: changing direct metadata alone cannot enable pull-request mode");
 	put(".omp/mosaic.json", `${JSON.stringify(runtimeConfig, null, 2)}\n`);
 	writeFileSync(manifest, JSON.stringify(input));
 	console.log("PASS landing invalid manifests: missing/unsupported host, unknown mode, direct host rejected");
 	run([bun, "tools/doctor.ts"], 0);
+	for (const topology of ["monorepo", "multi-repo"]) {
+		const directTarget = join(scratch, `direct-${topology}`);
+		writeFileSync(manifest, JSON.stringify({ ...input, topology, landing: { mode: "direct" },
+			remotes: { ...input.remotes, members: { api: "https://github.com/example/api.git" } },
+			members: topology === "multi-repo" ? [{ ...input.components[0], name: "api" }] : [],
+		}));
+		await install({ manifest, target: directTarget });
+		for (const file of ["docs/process/stacked-prs.md", ".omp/rules/stacked-prs.md", "tools/stack-base.ts", "tools/constants/stack-base.ts"]) ok(!existsSync(join(directTarget, file)), file);
+		ok(!("repositories" in JSON.parse(readFileSync(join(directTarget, ".omp/mosaic.json"), "utf8"))));
+		ok(!("bases" in (Bun.YAML.parse(readFileSync(join(directTarget, "docs/plans/TEMPLATE.md"), "utf8").split("---")[1]!) as object)));
+		const result = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: directTarget, stdout: "pipe", stderr: "pipe" });
+		strictEqual(result.exitCode, 0, result.stdout.toString());
+		mkdirSync(join(directTarget, "docs/process"), { recursive: true });
+		writeFileSync(join(directTarget, "docs/process/stacked-prs.md"), "# Project-owned stack guidance\nThis custom rule belongs to the project.\n");
+		const projectRule = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: directTarget, stdout: "pipe", stderr: "pipe" });
+		strictEqual(projectRule.exitCode, 0, projectRule.stdout.toString());
+		console.log(`PASS direct/${topology}: fresh install excludes stacking and has doctor 0/0/0; adding a project-owned stacking rule does not fail doctor`);
+	}
+	const negativeRoot = join(scratch, "pr-none-monorepo");
+	const doctorAt = (code: number, diagnostic: string) => {
+		const result = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: negativeRoot, stdout: "pipe", stderr: "pipe" });
+		strictEqual(result.exitCode, code, result.stdout.toString());
+		ok(result.stdout.toString().includes(diagnostic), result.stdout.toString());
+	};
+	const stackMetadata = readFileSync(join(negativeRoot, ".omp/mosaic.json"), "utf8");
+	const invalidMetadata = JSON.parse(stackMetadata);
+	invalidMetadata.repositories.push(invalidMetadata.repositories[0]);
+	writeFileSync(join(negativeRoot, ".omp/mosaic.json"), JSON.stringify(invalidMetadata));
+	doctorAt(1, "invalid repositories metadata");
+	writeFileSync(join(negativeRoot, ".omp/mosaic.json"), stackMetadata);
+	const stackTool = readFileSync(join(negativeRoot, "tools/stack-base.ts"));
+	rmSync(join(negativeRoot, "tools/stack-base.ts"));
+	doctorAt(1, "tools/stack-base.ts: /mosaic-kit: required in pull-request mode");
+	writeFileSync(join(negativeRoot, "tools/stack-base.ts"), stackTool);
+	rmSync(join(negativeRoot, ".omp/rules/stacked-prs.md"));
+	writeFileSync(join(negativeRoot, ".omp/rules/stacked-prs.md"), readFileSync(join(negativeRoot, "docs/process/stacked-prs.md")));
+	doctorAt(1, "must be a symlink");
+	rmSync(join(negativeRoot, ".omp/rules/stacked-prs.md"));
+	symlinkSync("../../docs/process/stacked-prs.md", join(negativeRoot, ".omp/rules/stacked-prs.md"));
+	doctorAt(0, "doctor: 0 fail, 0 warn, 0 cannot-evaluate");
+	console.log("PASS stack doctor negatives: duplicate repositories, absent resolver, ordinary-file rule; repaired doctor 0/0/0");
 	deepStrictEqual(JSON.parse(run([bun, "tools/checkup.ts", "--json"], 0)), { findings: [], cannotEvaluate: [] });
 	console.log("PASS fresh two-component monorepo: doctor and checkup");
 
