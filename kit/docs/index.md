@@ -10,6 +10,11 @@
 | [gaps-archive.md](gaps-archive.md) | Closed obligation evidence | Auditing a closed entry |
 | [plans/README.md](plans/README.md) | Master ledger for every repo | Reserving a number or locating a plan |
 | [plans/TEMPLATE.md](plans/TEMPLATE.md) | Plan schema | Authoring a plan |
+{{DIAGRAMS_DRAWIO}}
+| Diagram contract at `{{DIAGRAMS_ROOT}}/README.md` | File/cell contract, provenance, transitions | Editing or reviewing topology |
+| `diagrams` skill and `diagram-keeper` | MCP editing and validated worktree evidence, no commits | A plan's last diagram task |
+| `bun tools/diagram-check.ts`, `bun tools/diagram-delta.ts` | Offline validation, normalization, projection, delta and comparison | Checking topology and plan close-out |
+{{/DIAGRAMS_DRAWIO}}
 {{TRACKING_LOCAL}}| `/mosaic-intake` | Read-only request investigation and human digest | Investigating an external request |
 {{/TRACKING_LOCAL}}{{TRACKING_MCP}}| `/mosaic-intake` | Read-only request investigation and human digest | Investigating an external request |
 {{/TRACKING_MCP}}| `/mosaic-checkup`, [sweep tool](../tools/checkup.ts) | Deterministic drift sweep and human digest (`bun tools/checkup.ts [--root dir] [--json]`; exits 0 PASS / 1 findings / 2 CANNOT-EVALUATE) | Checking project records |
@@ -41,6 +46,9 @@
 | [records-guard](process/records-guard.md) | Governed-edit reminder | Before matching edits/writes; interrupt-scoped |
 | [mosaic-core](process/mosaic-core.md) | Integrity, authority, evidence | Always applied |
 | [model-notes](process/model-notes.md) | Deferred family prompts | Model configuration; human decides placement |
+{{DIAGRAMS_DRAWIO}}
+| [diagrams](process/diagrams.md) | Architecture deltas, direction decisions and receipts | Planning, editing or closing an architectural change |
+{{/DIAGRAMS_DRAWIO}}
 {{STANDARDS}}## Repo map
 | Path | Contents |
 |---|---|

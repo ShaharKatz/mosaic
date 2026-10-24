@@ -23,6 +23,9 @@ Planning runs at maximum effort. Use the configured planning role; if that role 
 6. Read `docs/process/dispatch.md`; read `docs/process/plan-home.md`; read `docs/process/records.md`. Write executor-sized tasks using the dispatch contract and the correct repo/path frame; set `class: docs` for documentation tasks and `class: code` otherwise, with acceptance per class. Documentation tasks still use executors; close-out work is never a task. Before dispatch, verify every source path, heading, and numeric range a task names against the source itself; a task must not ask an executor to infer members that are not there. Include the records rule in `reads:` for governed-file tasks. Delegate research-heavy subparts if useful; author the plan yourself.
 7. Read `docs/process/review-loop.md`. Write concrete diff checks in the Review checklist; a check restates the relevant trap as the check itself (what the reviewer greps or runs), never as a P-number. The instructions an executor will run are what the plan proves: test the exact final commands and code, including optional-value guards and the full declared value domain; a sketch that differs from the final instructions is illustrative, never evidence.
 8. Read `docs/process/verification.md`. Fill Verification and Unverified from the research under that rule.
+{{DIAGRAMS_DRAWIO}}
+9. Read `docs/process/diagrams.md`. Fill Architecture delta; the decision predicate requires recorded global decisions and intent before drawing. Use the approved plan as intent without a tracker. End implementation with the diagram task after the records task.
+{{/DIAGRAMS_DRAWIO}}
 
 ## Phase 2 — Adversarial rounds
 1. Read `docs/process/map.md`; read `docs/process/plan-triage.md`. For a genuinely trivial plan, ask the human to waive the debate; log the granted waiver's author and reason, then go to Phase 3. Without a waiver, run this phase before presenting approval.

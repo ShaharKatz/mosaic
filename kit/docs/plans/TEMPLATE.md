@@ -40,6 +40,21 @@ element-doc sentence) by content with its catalog or doc, never a number.
 Explicit non-goals. Check the [architecture docs](../architecture/README.md) and the pitfall
 catalogs of the targeted repos (`rule://registries`) for things to fence out.
 
+{{DIAGRAMS_DRAWIO}}
+## Architecture delta
+
+- adds: none
+- realizes: none
+- builds: none
+- retires: none
+- removes: none
+- withdraws: none
+- changes: none
+- diagrams: none
+
+Entries are `<file>#<id>`, optionally with `(D<n>, plan:NNNN)` or `(D<n>, tracker://<key>)`, per `{{DIAGRAMS_ROOT}}/README.md`.
+
+{{/DIAGRAMS_DRAWIO}}
 ## Task breakdown
 
 One block per executor task. Design `files:` sets to be disjoint wherever parallel execution is wanted.
@@ -59,6 +74,9 @@ Path-frame example: {{MULTI_REPO}}member-homed `reads: ../docs/...` versus prose
 
 Concrete checks the reviewer runs against the diff; a check restates the relevant trap as the check
 itself (what to grep or run), never as a P-number.
+{{DIAGRAMS_DRAWIO}}
+The Architecture delta matches `bun tools/diagram-delta.ts compare <plan> <base sha> HEAD`.
+{{/DIAGRAMS_DRAWIO}}
 
 ## Verification
 

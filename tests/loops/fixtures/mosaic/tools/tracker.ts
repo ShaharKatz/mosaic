@@ -164,7 +164,7 @@ function summary(item: Item) {
 	return { key, id, title, state, assignee, labels, url, updatedAt, managed };
 }
 function overlaps(left: string, right: string): boolean {
-	if (left.startsWith("contract:") || right.startsWith("contract:")) return left === right;
+	if (left.startsWith("contract:") || right.startsWith("contract:") || left.startsWith("diagram:") || right.startsWith("diagram:")) return left === right;
 	left = left.replace(/^\.\//, "").replace(/\/$/, "");
 	right = right.replace(/^\.\//, "").replace(/\/$/, "");
 	if (new Bun.Glob(left).match(right) || new Bun.Glob(right).match(left)) return true;

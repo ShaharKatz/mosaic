@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmod, lstat, mkdir, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
+import { BUNDLE_FILES, DIAGRAMS_ROOT, DRAWIO_PACKAGE, safeRoot, safeDiagramsRoot, diagramPathKey } from "./tools/constants/diagrams.ts";
 
 type Member = { name: string; path: string; stack: string; testCommand: string; coverageNote: string };
 type Tracking = { mode: "none" | "local" | "mcp"; mcp?: { server: string; team?: string; queue?: string } };
@@ -15,6 +16,7 @@ type Manifest = {
   git: { defaultBranch: string };
   tracking: Tracking;
   landing: Landing;
+  diagrams?: { mode: "none" | "drawio"; root?: string };
   remotes: { link: string; members: Record<string, string> };
   members: Member[];
   components: Member[];
@@ -64,6 +66,18 @@ function manifestFrom(value: unknown): Manifest {
     if (landing.mode !== "pull-request") throw new Error("landing.closeOut is only valid in pull-request mode");
     if (landing.closeOut !== "two-commit") throw new Error("landing.closeOut must be two-commit");
   }
+  let diagrams: Manifest["diagrams"];
+  if (value.diagrams !== undefined) {
+    if (!record(value.diagrams) || !["none", "drawio"].includes(value.diagrams.mode as string)) throw new Error("diagrams.mode must be none or drawio");
+    if (value.diagrams.mode === "none") {
+      if (value.diagrams.root !== undefined) throw new Error("diagrams.root requires drawio mode");
+      diagrams = { mode: "none" };
+    } else {
+      const root = value.diagrams.root ?? DIAGRAMS_ROOT;
+      if (!safeRoot(root)) throw new Error("diagrams.root must be a safe repo-relative directory");
+      diagrams = { mode: "drawio", root };
+    }
+  }
   line(value.project.name, "project.name");
   line(value.project.summary, "project.summary");
   line(value.remotes.link, "remotes.link");
@@ -86,6 +100,7 @@ function manifestFrom(value: unknown): Manifest {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || names.has(name)) throw new Error(`${field}.name is invalid or duplicate: ${name}`);
       if (isAbsolute(entryPath) || entryPath.includes("\\") || entryPath.split("/").some(part => part === "." || part === "..")
         || !entryPath.replace(/\/+$/, "") || paths.has(entryPath.replace(/\/+$/, ""))) throw new Error(`${field}.path is invalid or duplicate: ${entryPath}`);
+      if (diagrams?.mode === "drawio" && !safeRoot(entryPath.replace(/\/+$/, ""))) throw new Error(`${field}.path is an invalid diagram component binding: ${entryPath}`);
       names.add(name);
       paths.add(entryPath.replace(/\/+$/, ""));
       if (label === "members" && topology === "multi-repo") line(remotes[name], `remotes.members.${name}`);
@@ -119,7 +134,7 @@ function manifestFrom(value: unknown): Manifest {
   }
   return {
     project: value.project as Manifest["project"], topology, git: { defaultBranch }, tracking: tracking as Tracking,
-    landing: landing as Landing,
+    landing: landing as Landing, diagrams,
     remotes: { link: value.remotes.link, members: remotes as Record<string, string> },
     members: value.members as Member[], components: components as Member[],
     ...(value.standards !== undefined ? { standards: value.standards as Standard[] } : {}),
@@ -188,6 +203,10 @@ function render(content: string, file: string, manifest: Manifest): string {
       (_match, mode: string, body: string) => mode === closeOutToken ? body : "")
     .replace(/\{\{(CLOSE_OUT_TWO_COMMIT|CLOSE_OUT_DEFAULT)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
       (_match, mode: string, body: string) => mode === closeOutToken ? body : "")
+    .replace(/^\{\{DIAGRAMS_DRAWIO\}\}\n([\s\S]*?)^\{\{\/DIAGRAMS_DRAWIO\}\}\n?/gm,
+      (_match, body: string) => manifest.diagrams?.mode === "drawio" ? body : "")
+    .replace(/\{\{DIAGRAMS_DRAWIO\}\}([\s\S]*?)\{\{\/DIAGRAMS_DRAWIO\}\}/g,
+      (_match, body: string) => manifest.diagrams?.mode === "drawio" ? body : "")
     .replace(/\{\{(MULTI_REPO|MONOREPO)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
       (_match, topology: string, body: string) => topology === (manifest.topology === "monorepo" ? "MONOREPO" : "MULTI_REPO") ? body : "");
   const result = selected.replace(/\{\{([^{}]+)\}\}/g, (_match, token: string) => {
@@ -200,6 +219,8 @@ function render(content: string, file: string, manifest: Manifest): string {
       case "MCP_SERVER": return manifest.tracking.mcp?.server ?? "";
       case "MCP_TEAM": return manifest.tracking.mcp?.team ?? "not configured; resolve the target team before creating intent";
       case "MCP_QUEUE": return manifest.tracking.mcp?.queue ?? "not configured; obtain the H-tracking queue ruling before intake";
+      case "DIAGRAMS_ROOT": return manifest.diagrams?.root ?? DIAGRAMS_ROOT;
+      case "DRAWIO_PACKAGE": return DRAWIO_PACKAGE;
       case "MEMBERS": return membersFor(file, manifest);
       case "STANDARDS": return manifest.standards?.length
         ? `## Standards\n| Standard | Read when |\n|---|---|\n${manifest.standards.map(entry => `| [${entry.name}](standards/${entry.name}.md) | Editing files matching ${entry.paths.map(glob => `\`${cell(glob)}\``).join(", ")} |`).join("\n")}\n` : "";
@@ -267,6 +288,18 @@ export async function install(options: { manifest: string; target: string; kit?:
     entries.delete("docs/process/final-review.md");
     entries.delete(".omp/rules/final-review.md");
   }
+  if (manifest.diagrams?.mode !== "drawio") {
+    const excluded = [...BUNDLE_FILES, "docs/architecture/diagrams"];
+    for (const name of entries.keys()) if (excluded.some(p => name === p || name.startsWith(p + "/"))
+      || name === ".omp/skills/diagrams" || name === ".claude/skills/diagrams" || name === "tools/constants") entries.delete(name);
+  } else if (manifest.diagrams.root !== DIAGRAMS_ROOT) {
+    for (const [name, entry] of [...entries]) if (name === DIAGRAMS_ROOT || name.startsWith(DIAGRAMS_ROOT + "/")) {
+      const destination = manifest.diagrams.root! + name.slice(DIAGRAMS_ROOT.length);
+      if (entries.has(destination)) throw new Error(`diagrams.root collides with kit file ${destination}`);
+      entries.delete(name); entries.set(destination, entry);
+    }
+  }
+  if (manifest.diagrams?.mode === "drawio" && !safeDiagramsRoot(manifest.diagrams.root)) throw new Error(`diagrams.root is reserved: ${manifest.diagrams.root}`);
   if (manifest.tracking.mode !== "local") {
     for (const name of entries.keys()) {
       if (name === "tools/tracker.ts" || name === "docs/tracker" || name.startsWith("docs/tracker/")
@@ -293,16 +326,30 @@ export async function install(options: { manifest: string; target: string; kit?:
           name: member.name, path: member.path, remote: manifest.remotes.members[member.name],
         })) : []),
       ] } : {}),
+      ...(manifest.diagrams?.mode === "drawio" ? { diagrams: { mode: "drawio", root: manifest.diagrams.root,
+        components: (manifest.topology === "monorepo" ? manifest.components : manifest.members).map(member => member.path.replace(/\/+$/, "")) } } : {}),
     }, null, 2)}\n`);
   }
   const targetStat = await existing(target);
   if (targetStat && !targetStat.isDirectory()) throw new Error(`Target must be a real directory: ${target}`);
   const pending: [string, Entry][] = [];
   const conflicts: string[] = [];
+  const plannedPaths = new Map<string, string>();
+  for (const name of entries.keys()) {
+    const key = diagramPathKey(name), previous = plannedPaths.get(key);
+    if (previous !== undefined && previous !== name) throw new Error(`Ambiguous planned destinations: ${previous} and ${name}`);
+    plannedPaths.set(key, name);
+  }
   // Preflight every destination before writing anything; never traverse destination symlinks.
   for (const [name, entry] of entries) {
+    const key = diagramPathKey(name);
+    if (key === ".mcp.json" || key.startsWith(".mcp.json/")) throw new Error(`Refusing project-owned .mcp.json destination: ${name}`);
     const destination = join(target, name);
     for (let parent = dirname(destination); parent !== target; parent = dirname(parent)) {
+      const parentName = relative(target, parent).split(sep).join("/"), plannedName = plannedPaths.get(diagramPathKey(parentName));
+      if (plannedName !== undefined && plannedName !== parentName) throw new Error(`Ambiguous planned destination ancestor: ${parentName} aliases ${plannedName}`);
+      const planned = plannedName === undefined ? undefined : entries.get(plannedName);
+      if (planned && planned.kind !== "directory") throw new Error(`Refusing planned destination ancestor: ${relative(target, parent)} (${planned.kind})`);
       const stat = await existing(parent);
       if (stat && !stat.isDirectory()) throw new Error(`Destination parent is not a real directory: ${parent}`);
     }

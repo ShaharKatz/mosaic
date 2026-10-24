@@ -7,7 +7,7 @@ The role is fixed by the phase, not by the kind of file touched; task class sele
 | Phase | Acts | Never |
 |---|---|---|
 | Planning (`/mosaic-plan`) | orchestrator drafts{{TRACKING_MCP}} and handles tracking per `rule://tracker`{{/TRACKING_MCP}}; `context-scout`/`registry-scout`{{TRACKING_LOCAL}}/`tracker-scout`{{/TRACKING_LOCAL}} read | executor, reviewers |
-| Task implementation (`/mosaic-execute` steps 3–4) | `executor` per task (code, tests, or documents alike); reviewers per task class below | orchestrator editing task files |
+| Task implementation (`/mosaic-execute` steps 3–4) | `executor` per task (code, tests, or documents alike);{{DIAGRAMS_DRAWIO}} `diagram-keeper` for the last diagram task;{{/DIAGRAMS_DRAWIO}} reviewers per task class below | orchestrator editing task files |
 | REVISE repair | `executor` re-dispatched with the findings, or the orchestrator for a mechanical correction (read `rule://review-loop`) | reviewers editing |
 | Close-out (`/mosaic-execute` steps 7–9) | orchestrator writes dispositions, the Execution log, and mechanical corrections; `librarian` proposes doc alignment; both reviewers review the closure packet | `executor` (except a REVISE repair of a plan task) |
 {{LANDING_DIRECT}}| Landing and registry sync (`/mosaic-execute` steps 10–13) | orchestrator | agents |{{/LANDING_DIRECT}}{{LANDING_PULL_REQUEST}}| Landing, final review and registry sync (`/mosaic-execute` steps 10–13) | orchestrator; default `gpt-reviewer` final engine per `rule://final-review` (Claude: `reviewer` for the corresponding configured role) | agents except authorized review/repair |{{/LANDING_PULL_REQUEST}}

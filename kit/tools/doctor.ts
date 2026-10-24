@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { realpathWithinRoot } from "./root-containment.ts";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 type Outcome = "FAIL" | "WARN" | "CANNOT-EVALUATE";
 const counts = { FAIL: 0, WARN: 0, "CANNOT-EVALUATE": 0 };
@@ -40,7 +41,9 @@ try {
 }
 const texts = new Map<string, string>();
 const standardFiles = new Set<string>();
+const unsafeBundleFiles = new Set<string>();
 function text(check: string, file: string): string | undefined {
+	if (unsafeBundleFiles.has(file)) return undefined;
 	const cached = texts.get(file);
 	if (cached !== undefined) return cached;
 	try {
@@ -93,6 +96,8 @@ type Standard = { name: string; paths: string[]; dir?: string; designSystem?: st
 let standards: Standard[] = [];
 let repositories: { name: string; path: string; remote: string }[] = [];
 let landingMode = "direct";
+let diagramsOn = false;
+let diagramsRoot = "";
 if (fs.existsSync(path.join(root, configPath))) {
 	const content = text("mosaic-config", configPath);
 	if (content !== undefined) {
@@ -154,6 +159,53 @@ if (fs.existsSync(path.join(root, configPath))) {
 				}
 				standards = config.standards;
 			}
+			const diagrams = config.diagrams;
+			if (diagrams !== undefined) {
+				if (!diagrams || !["none", "drawio"].includes(diagrams.mode)) throw new Error("diagrams.mode must be none or drawio");
+				if (diagrams.mode === "none" && (diagrams.root !== undefined || diagrams.components !== undefined)) throw new Error("diagrams settings require drawio mode");
+				if (diagrams.mode === "drawio") {
+					// Execute only this doctor's contained sibling; inspected bundle contracts remain data.
+					const ownDirectory = path.dirname(fs.realpathSync(fileURLToPath(import.meta.url)));
+					let ownConstants: string;
+					try {
+						const candidate = fileURLToPath(new URL("./constants/diagrams.ts", import.meta.url));
+						const contained = realpathWithinRoot(ownDirectory, candidate);
+						if (!contained) throw new Error("unavailable");
+						const stat = fs.statSync(contained);
+						if (!stat.isFile() || !(stat.mode & 0o444)) throw new Error("unavailable");
+						fs.accessSync(contained, fs.constants.R_OK); ownConstants = contained;
+					} catch { throw new Error("diagrams bundle constants unavailable next to doctor"); }
+					const contract = await import(pathToFileURL(ownConstants).href);
+					if (!contract.safeDiagramsRoot(diagrams.root) || !Array.isArray(diagrams.components)
+						|| diagrams.components.some((component: unknown) => !contract.safeRoot(component))) throw new Error("invalid diagrams root or component bindings");
+					diagramsOn = true;
+					diagramsRoot = diagrams.root;
+					for (const directory of [diagrams.root, ...diagrams.components]) {
+						const candidate = path.join(root, directory);
+						// Components can be absent until the project checkout is populated; existing paths cannot escape.
+						if (fs.existsSync(candidate) && realpathWithinRoot(root, candidate) === null) throw new Error(`diagram path outside repository: ${directory}`);
+					}
+					for (const file of [...contract.BUNDLE_FILES, `${diagrams.root}/README.md`]) {
+						try {
+							const candidate = path.join(root, file), contained = realpathWithinRoot(root, candidate);
+							if (!contained) throw new Error("unavailable");
+							const stat = fs.statSync(contained);
+							if (!stat.isFile() || !(stat.mode & 0o444)) throw new Error("unavailable");
+							fs.accessSync(contained, fs.constants.R_OK);
+							if (file === "tools/constants/diagrams.ts" && !fs.readFileSync(contained).equals(fs.readFileSync(ownConstants))) throw new Error("differs from doctor's trusted sibling");
+						} catch {
+							unsafeBundleFiles.add(file);
+							finding("FAIL", "diagrams", file, "required bundle file missing, unreadable, outside repository, or differs from trusted constants");
+						}
+					}
+					try {
+						const mount = JSON.parse(fs.readFileSync(path.join(root, ".mcp.json"), "utf8")).mcpServers?.drawio;
+						if (mount?.command !== contract.DRAWIO_MOUNT.command || JSON.stringify(mount?.args) !== JSON.stringify(contract.DRAWIO_MOUNT.args)) throw new Error("missing or mismatched drawio entry");
+					} catch {
+						finding("FAIL", "diagrams", ".mcp.json", `declare drawio using ${contract.DRAWIO_PACKAGE}; configuration is not running-server proof`);
+					}
+				}
+			}
 			defaultBranch = config.defaultBranch;
 			trackingMode = tracking.mode;
 			landingMode = landing.mode;
@@ -172,13 +224,16 @@ const processNames = [
 	"targeted-tests", "records-guard", "model-notes", "intake", "tracker",
 ];
 if (landingMode === "pull-request") processNames.push("final-review");
+if (diagramsOn) processNames.push("diagrams");
 const skillNames = ["mosaic-plan", "mosaic-execute", "mosaic-gap-audit", "mosaic-intake", "mosaic-checkup", "mosaic-kit"];
+if (diagramsOn) skillNames.push("diagrams");
 const agentPairs = [
 	["executor", "executor"], ["plan-adversary", "plan-adversary"], ["registry-scout", "registry-scout"],
 	["context-scout", "context-scout"], ["claude-reviewer", "reviewer"], ["gpt-reviewer", "reviewer"],
 	["tracker-scout", "tracker-scout"], ["librarian", "librarian"], ["ticket-investigator", "ticket-investigator"],
-] as const;
+];
 const installedAgentPairs = agentPairs.filter(([name]) => name !== "tracker-scout" || trackingMode === "local");
+if (diagramsOn) installedAgentPairs.push(["diagram-keeper", "diagram-keeper"]);
 // Structural contracts belong to the kit, not unrelated project harness entries.
 const processFiles = processNames.map(name => `docs/process/${name}.md`).sort();
 const ompRules = processNames.map(name => `.omp/rules/${name}.md`);
@@ -566,6 +621,7 @@ const placeholderFiles = new Set([
 	"AGENTS.md", "CLAUDE.md", "docs/index.md", "docs/gaps.md", "docs/gaps-archive.md",
 	"docs/architecture/README.md", "docs/architecture/pitfalls.md", "docs/architecture/open-questions.md", "docs/kit/maintenance.md",
 	"docs/plans/README.md", "docs/plans/TEMPLATE.md", "docs/product/README.md",
+	...(diagramsOn && diagramsRoot ? [`${diagramsRoot}/README.md`] : []),
 	...harnessFiles, ...processFiles,
 	...standards.map(standard => `docs/standards/${standard.name}.md`),
 	...(trackingMode === "local" ? files("placeholders", "docs/tracker", false).filter(file => file.endsWith(".json")) : []),

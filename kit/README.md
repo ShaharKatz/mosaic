@@ -255,6 +255,31 @@ Doctor fails for missing files, wrong pointers/scopes, or globs matching no non-
 It uses installation-relative Git inventories when available, with a filesystem fallback without git; unmatched globs with incomplete inventory are cannot-evaluate and name the unavailable repositories.
 It resolves the folder's owning repo from its nearest existing ancestor and checks
 `git check-ignore -q <dir>/` there (owner-relative path; cannot-evaluate without git).
+### Optional architecture diagrams
+
+Manifest `diagrams: { "mode": "none" | "drawio", "root"?: "repo-relative-directory" }`
+defaults to `none`. Enable drawio only by owner opt-in; the default root is
+`docs/architecture/diagrams`. Absolute roots, traversal, backslashes, whitespace and
+empty segments are rejected, as are `.git` segments, harness/tool namespaces, `docs/tracker`
+and `docs/standards` subtrees, reserved documentation homes and colliding kit destinations.
+Every destination ancestor is checked against both planned entries and the filesystem before writes;
+a planned file or symlink cannot become a directory. Reserved names and planned destinations use
+one NFC-normalized, case-insensitive identity policy on every filesystem; ambiguous aliases are
+rejected rather than guessing filesystem sensitivity. The selected root receives the project-owned contract starter;
+the kit installs a diagram rule, skill/keeper twins and Bun validation/delta tools.
+Runtime metadata records the selected root and manifest member/component bindings.
+With no tracker, an approved `plan:NNNN` is intent; other modes use `tracker://<key>`.
+The core has no schema generator or generated-folder comparison exemption.
+
+The project owns `.mcp.json`; the mechanical helper never writes it, even with `--force`.
+The owner merges `{"mcpServers":{"drawio":{"command":"npx","args":["-y","<package>"]}}}`
+without replacing other servers, taking `<package>` from `DRAWIO_PACKAGE` in
+`tools/constants/diagrams.ts` (the only pin). Doctor **FAILs** missing/mismatched mounts;
+configuration is not proof of a running server. The diagrams skill checks mounted tools
+before any write. Offline validation/deltas need no MCP.
+DIAGRAMS_DRAWIO blocks select opt-in text after tracking/landing/close-out and before
+topology/values; DIAGRAMS_ROOT and DRAWIO_PACKAGE expand selected values.
+Without the bundle, no diagram files, tools, MCP requirement or caller hooks are installed.
 
 ### Mechanical helper: greenfield/manual path
 
