@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { install } from "../../kit/install.ts";
 import { BUNDLE_FILES, DIAGRAMS_ROOT, DRAWIO_MOUNT } from "../../kit/tools/constants/diagrams.ts";
+import { BUNDLE_FILES as ERD_FILES } from "../../kit/tools/constants/erd.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "mosaic-tooling-"));
 const target = join(scratch, "target");
@@ -1253,6 +1254,50 @@ try {
 	console.log("PASS landing direct: omitted/explicit metadata and every Markdown byte agree; legacy ff-only flow retained");
 
 	// The helper never writes project-owned MCP configuration, on or off.
+	for (const file of ERD_FILES) ok(!existsSync(join(target, file)), `off omits ${file}`);
+	const erd = { adapter: "prisma", schemaGlobs: ["schema/**/*.prisma"], output: `${DIAGRAMS_ROOT}/erd`, component: "platform", label: "Schema" };
+	for (const topology of ["monorepo", "multi-repo"]) for (const landing of [{ mode: "direct" }, { mode: "pull-request", host: "github" }]) {
+		const fresh = join(scratch, `erd-${topology}-${landing.mode}`);
+		writeFileSync(manifest, JSON.stringify({ ...input, topology, landing, diagrams: { mode: "drawio", erd },
+			remotes: { ...input.remotes, members: { api: "https://example.invalid/api.git" } },
+			members: topology === "multi-repo" ? [{ ...input.components[0], name: "api" }] : [] }));
+		await install({ manifest, target: fresh });
+		writeFileSync(join(fresh, ".mcp.json"), JSON.stringify({ mcpServers: { drawio: DRAWIO_MOUNT } }));
+		for (const file of ERD_FILES) ok(existsSync(join(fresh, file)));
+		const doctor = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		strictEqual(doctor.exitCode, 0, `${doctor.stdout}\n${doctor.stderr}`);
+		strictEqual(doctor.stdout.toString(), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+		const runtime = JSON.parse(readFileSync(join(fresh, ".omp/mosaic.json"), "utf8")); deepStrictEqual(runtime.diagrams.erd, erd);
+		for (const settings of [{ ...erd, adapter: "other" }, { ...erd, output: "../outside" }, { ...erd, output: `${DIAGRAMS_ROOT}/README.md/nested` },
+			{ ...erd, output: `${DIAGRAMS_ROOT}/.GIT/erd` }, { ...erd, schemaGlobs: ["../schema.prisma"] }, { ...erd, component: "unknown" }, { ...erd, label: "" }]) {
+			writeFileSync(join(fresh, ".omp/mosaic.json"), JSON.stringify({ ...runtime, diagrams: { ...runtime.diagrams, erd: settings } }));
+			const invalid = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+			strictEqual(invalid.exitCode, 1, `${invalid.stdout}\n${invalid.stderr}`); ok(invalid.stdout.toString().includes("FAIL mosaic-config"));
+		}
+		writeFileSync(join(fresh, ".omp/mosaic.json"), JSON.stringify(runtime));
+		if (topology === "monorepo" && landing.mode === "direct") {
+			const marker = join(scratch, "erd-target-executed"), external = join(scratch, "untrusted-erd.ts");
+			writeFileSync(external, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "executed");`);
+			rmSync(join(fresh, "tools/constants/erd.ts")); symlinkSync(external, join(fresh, "tools/constants/erd.ts"));
+			for (const command of [[bun, new URL("../../kit/tools/doctor.ts", import.meta.url).pathname, "--root", fresh], [bun, "tools/doctor.ts"]]) {
+				const untrusted = Bun.spawnSync(command, { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+				strictEqual(untrusted.exitCode, 1, `${untrusted.stdout}\n${untrusted.stderr}`); ok(!existsSync(marker), "doctor never executes target/external adapter constants");
+			}
+			rmSync(join(fresh, "tools/constants/erd.ts"));
+			writeFileSync(join(fresh, "tools/constants/erd.ts"), readFileSync(new URL("../../kit/tools/constants/erd.ts", import.meta.url), "utf8"));
+			rmSync(join(fresh, "tools/erd-generate.ts"));
+			const missing = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+			strictEqual(missing.exitCode, 1); ok(missing.stdout.toString().includes("required ERD adapter file missing"));
+		}
+		console.log(`PASS Prisma ERD ${topology}/${landing.mode}: doctor 0/0/0; invalid settings fail closed`);
+	}
+	for (const diagrams of [{ mode: "none", erd }, { mode: "drawio", erd: { ...erd, output: "sibling/erd" } },
+		{ mode: "drawio", erd: { ...erd, output: `${DIAGRAMS_ROOT}/README.md` } },
+		{ mode: "drawio", erd: { ...erd, output: `${DIAGRAMS_ROOT}/.GIT/erd` } },
+		{ mode: "drawio", erd: { ...erd, schemaGlobs: [] } }]) {
+		const fresh = join(scratch, "invalid-erd"); writeFileSync(manifest, JSON.stringify({ ...input, diagrams }));
+		await rejects(install({ manifest, target: fresh })); ok(!existsSync(fresh), "invalid adapter causes no writes");
+	}
 	for (const file of [...BUNDLE_FILES, DIAGRAMS_ROOT, ".mcp.json"]) ok(!existsSync(join(target, file)), `off omits ${file}`);
 	for (const tracking of [{ mode: "none" }, { mode: "local" }, { mode: "mcp", mcp: { server: "issues" } }]) {
 		for (const topology of ["monorepo", "multi-repo"]) {

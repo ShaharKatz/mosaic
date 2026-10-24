@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 // Revision/worktree projection, semantic delta and strict plan comparison. Never writes.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { relative } from "node:path";
-import { Drawing, decisions, diagramPaths, frontmatter, settings, styles, validIntent, readDiagram } from "./diagram-check.ts";
+import { fileURLToPath } from "node:url";
+import { Drawing, decisions, diagramPaths, frontmatter, settings, styles, validIntent, readDiagram, serialize } from "./diagram-check.ts";
 import type { Cell, Settings } from "./diagram-check.ts";
 import * as c from "./constants/diagrams.ts";
 function git(...args: string[]): string {
@@ -35,7 +36,7 @@ function semantic(d: Drawing, e: Cell, transition?: c.Kind, before?: string, aft
   return JSON.stringify([sorted(metadata), sorted(structural), sorted(style), d.rows(e)]);
 }
 export type Change = { kind: c.Kind; reference: string; before?: Cell; after?: Cell; beforeLayer?: string; afterLayer?: string; rows: string[] };
-export type Report = { changes: Change[]; legends: string[]; failures: string[]; changedFiles: string[]; snapshots: Map<string, [Drawing | undefined, Drawing | undefined]> };
+export type Report = { changes: Change[]; legends: string[]; failures: string[]; changedFiles: string[]; snapshots: Map<string, [Drawing | undefined, Drawing | undefined]>; head?: string };
 const transitions: Record<string, c.Kind> = { "→intended": "adds", "→as-built": "builds", "intended→as-built": "realizes", "as-built→retiring": "retires", "retiring→": "removes", "as-built→": "removes", "intended→": "withdraws" };
 function rowDiff(before: string[], after: string[]): string[] {
   // LCS keeps unchanged rows out of the report, including repeated table rows.
@@ -52,7 +53,7 @@ function rowDiff(before: string[], after: string[]): string[] {
 export function delta(base: string, head: string | undefined, config: Settings, paths: string[] = []): Report {
   const pathsAt = (revision: string | undefined) => new Set(revision === undefined ? diagramPaths(config.root) : git("ls-tree", "-rz", "--name-only", revision, "--", config.root).split("\0").filter(p => p.endsWith(".drawio")));
   const oldPaths = pathsAt(base), newPaths = pathsAt(head);
-  const report: Report = { changes: [], legends: [], failures: [], changedFiles: [], snapshots: new Map() };
+  const report: Report = { changes: [], legends: [], failures: [], changedFiles: [], snapshots: new Map(), head };
   for (const path of [...new Set([...oldPaths, ...newPaths])].sort()) {
     if (paths.length && !paths.some(p => path === p || path.startsWith(p.replace(/\/+$/, "") + "/"))) continue;
     const oldText = oldPaths.has(path) ? git("show", `${base}:${path}`) : undefined;
@@ -116,10 +117,37 @@ export function compare(report: Report, text: string, config: Settings): string[
   let declaration: Declaration;
   try { declaration = parseDeclaration(text); } catch (error) { return [(error as Error).message]; }
   const { declared, diagrams } = declaration, mapped = decisions(), failures = [...report.failures];
+  const generated = new Set<string>();
+  const erd = JSON.parse(readFileSync(c.CONFIG_PATH, "utf8")).diagrams?.erd;
+  let snapshotMatches = true;
+  if (erd !== undefined && report.head !== undefined) {
+    // Optional adapter constants are absent in installations without the adapter.
+    const { DEPENDENCY_DIRECTORY } = require("./constants/erd.ts");
+    const included = (file: string) => !file.split("/").includes(DEPENDENCY_DIRECTORY);
+    const patterns = erd.schemaGlobs.map((glob: string) => new Bun.Glob(glob));
+    const revisionInputs = git("ls-tree", "-rz", "--name-only", report.head).split("\0").filter(file => included(file) && patterns.some((glob: Bun.Glob) => glob.match(file))).sort();
+    const worktreeInputs = [...new Set<string>(erd.schemaGlobs.flatMap((glob: string) => [...new Bun.Glob(glob).scanSync({ onlyFiles: true, followSymlinks: false })]))].filter(included).sort();
+    snapshotMatches = JSON.stringify(revisionInputs) === JSON.stringify(worktreeInputs)
+      && revisionInputs.every(file => existsSync(file) && git("show", `${report.head}:${file}`) === readFileSync(file, "utf8"))
+      && JSON.stringify(JSON.parse(git("show", `${report.head}:${c.CONFIG_PATH}`)).diagrams) === JSON.stringify(JSON.parse(readFileSync(c.CONFIG_PATH, "utf8")).diagrams);
+    if (!snapshotMatches) failures.push("ERD sync check cannot verify revision: Prisma inputs or adapter settings differ from worktree");
+  }
+  if (erd !== undefined && snapshotMatches) {
+    // Optional adapter may not be installed. Its read-only CLI validates settings and sync first.
+    const check = Bun.spawnSync([process.execPath, fileURLToPath(new URL("./erd-generate.ts", import.meta.url)), "--check"], { stdout: "pipe", stderr: "pipe" });
+    if (check.exitCode !== 0) failures.push(`ERD sync check failed: ${check.stdout.toString().trim()} ${check.stderr.toString().trim()}`);
+    else for (const [path, [before, after]] of report.snapshots) {
+      if (!path.startsWith(erd.output + "/") || !(after ?? before)?.xml.attrs.generator) continue;
+      if (existsSync(path) !== !!after) continue;
+      // Revision comparisons cannot borrow a passing check from a different worktree snapshot.
+      if (after && serialize(after.xml) !== serialize(new Drawing(readDiagram(path, config)).xml)) continue;
+      if ((after ?? before)!.xml.attrs.generator === "mosaic-prisma-erd") generated.add(relative(config.root, path));
+    }
+  }
   const observed = Object.fromEntries(c.KINDS.map(k => [k, new Set<string>()])) as Record<c.Kind, Set<string>>;
-  for (const file of report.changedFiles) if (!diagrams.some(p => file === p || (p.endsWith("/") && file.startsWith(p)))) failures.push(`${c.UNLISTED}: ${file}`);
-  // No folder exemption: core has no generator adapter capable of proving generated output.
+  for (const file of report.changedFiles) if (!generated.has(file) && !diagrams.some(p => file === p || (p.endsWith("/") && file.startsWith(p)))) failures.push(`${c.UNLISTED}: ${file}`);
   for (const change of report.changes) {
+    if (generated.has(change.reference.split("#")[0]!)) continue;
     const { kind, reference } = change; observed[kind].add(reference);
     if (!declared[kind].has(reference)) failures.push(`${c.UNDECLARED}: ${kind}: ${reference}`);
     let citation: Citation | undefined;

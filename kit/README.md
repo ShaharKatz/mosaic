@@ -319,6 +319,31 @@ DIAGRAMS_DRAWIO blocks select opt-in text after tracking/landing/close-out and b
 topology/values; DIAGRAMS_ROOT and DRAWIO_PACKAGE expand selected values.
 Without the bundle, no diagram files, tools, MCP requirement or caller hooks are installed.
 
+#### Optional Prisma ERDs
+
+With drawio selected, optionally set `diagrams.erd` to
+`{ "adapter": "prisma", "schemaGlobs": ["schema/**/*.prisma"], "output": "docs/architecture/diagrams/erd", "component": "platform", "label": "Schema" }`.
+These are illustrative values: derive globs, component and label from the project and obtain owner opt-in.
+Absence installs no adapter files, schema commands or generated-folder exemption.
+Single-file schemas (including datasource/generator blocks) and split schemas are supported;
+unsupported syntax reports file:line instead of dropping facts. No MCP, database or migration runs.
+The output must be a safe directory **strictly inside** the selected diagrams root, never a
+kit-file collision. It shares core's NFC/case-folded supported-root restrictions; siblings are not supported.
+`component` must be an installed diagram binding, `platform` or `external`; `label` is a nonempty
+single-line project-chosen caption. `schemaGlobs` is a nonempty array of safe repository-relative
+globs ending in `.prisma`, without traversal, whitespace, braces, backslashes or parentheses.
+
+Run `bun tools/erd-generate.ts`, then `bun tools/erd-generate.ts --check` and
+`bun tools/diagram-check.ts` through the project's declared verification command on schema changes.
+`--check` is read-only and names missing/changed/unexpected files; `--file <schema>` takes a
+repo-relative input or unambiguous suffix and isolates its output, while resolving cross-file references.
+Generation preflights all inputs before writes, refuses hand-authored destination collisions, and
+cleans only orphans with the `.erd.drawio` suffix **and** the adapter marker.
+Generated output is explicitly marked, never keeper-edited. Only enabled, fully synchronized output
+matching the compared snapshot is exempt from declarations; no unconditional folder exemption exists.
+DIAGRAMS_ERD slash-closed own-line/inline blocks select adapter-only Markdown after DIAGRAMS_DRAWIO;
+doctor loads the adapter contract only from its own contained sibling constants when enabled.
+
 PR evidence requires `landing: { mode: "pull-request", host: "github" }`. Ask whether the project
 wants it and which source paths need evidence; browser checks and picture capture separately need the human's OK.
 Selecting it installs `.github/pull_request_template.md` only when no project default template exists.

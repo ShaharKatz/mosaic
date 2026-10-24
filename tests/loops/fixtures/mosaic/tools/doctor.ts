@@ -157,7 +157,7 @@ if (fs.existsSync(path.join(root, configPath))) {
 			const diagrams = config.diagrams;
 			if (diagrams !== undefined) {
 				if (!diagrams || !["none", "drawio"].includes(diagrams.mode)) throw new Error("diagrams.mode must be none or drawio");
-				if (diagrams.mode === "none" && (diagrams.root !== undefined || diagrams.components !== undefined)) throw new Error("diagrams settings require drawio mode");
+				if (diagrams.mode === "none" && (diagrams.root !== undefined || diagrams.components !== undefined || diagrams.erd !== undefined)) throw new Error("diagrams settings require drawio mode");
 				if (diagrams.mode === "drawio") {
 					// Execute only this doctor's contained sibling; inspected bundle contracts remain data.
 					const ownDirectory = path.dirname(fs.realpathSync(fileURLToPath(import.meta.url)));
@@ -191,6 +191,40 @@ if (fs.existsSync(path.join(root, configPath))) {
 						} catch {
 							unsafeBundleFiles.add(file);
 							finding("FAIL", "diagrams", file, "required bundle file missing, unreadable, outside repository, or differs from trusted constants");
+						}
+					}
+					if (diagrams.erd !== undefined) {
+						// Optional bundle is absent in core-only installs; static imports would break them.
+						let erdConstants: string;
+						try {
+							const candidate = fileURLToPath(new URL("./constants/erd.ts", import.meta.url));
+							const contained = realpathWithinRoot(ownDirectory, candidate);
+							if (!contained || !fs.statSync(contained).isFile() || !(fs.statSync(contained).mode & 0o444)) throw new Error("unavailable");
+							fs.accessSync(contained, fs.constants.R_OK); erdConstants = contained;
+						} catch { throw new Error("ERD adapter constants unavailable next to doctor"); }
+						const adapter = await import(pathToFileURL(erdConstants).href);
+						adapter.validateErd(diagrams.erd, diagrams.root, diagrams.components);
+						const output = diagrams.erd.output;
+						for (let candidate = path.join(root, output); candidate !== root; candidate = path.dirname(candidate)) {
+							// lstat, not existsSync: a dangling symlink must fail here as it does in the generator.
+							const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
+							if (stat && (!stat.isDirectory() || !realpathWithinRoot(root, candidate))) throw new Error(`unsafe ERD output ancestor: ${output}`);
+						}
+						const outputKey = contract.diagramPathKey(output);
+						for (const file of [...contract.BUNDLE_FILES, ...adapter.BUNDLE_FILES, `${diagrams.root}/README.md`]) {
+							const key = contract.diagramPathKey(file);
+							if (key === outputKey || key.startsWith(outputKey + "/") || outputKey.startsWith(key + "/")) throw new Error(`ERD output collides with kit file: ${file}`);
+						}
+						for (const file of adapter.BUNDLE_FILES) {
+							try {
+								const contained = realpathWithinRoot(root, path.join(root, file));
+								if (!contained || !fs.statSync(contained).isFile() || !(fs.statSync(contained).mode & 0o444)) throw new Error("unavailable");
+								fs.accessSync(contained, fs.constants.R_OK);
+								if (file === "tools/constants/erd.ts" && !fs.readFileSync(contained).equals(fs.readFileSync(erdConstants))) throw new Error("differs from trusted sibling");
+							} catch {
+								unsafeBundleFiles.add(file);
+								finding("FAIL", "diagrams", file, "required ERD adapter file missing, unreadable, outside repository, or differs from trusted constants");
+							}
 						}
 					}
 					try {

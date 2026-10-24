@@ -45,3 +45,6 @@ Return the worktree delta, validator count line, text projection, comparison res
 
 ## Hard boundaries
 Never stage or commit, never edit outside the authorized diagrams home, never read SVG as text, never silently skip an unavailable MCP or substitute manual topology edits beyond bootstrap/normalization. No generated-file ownership is implied by the core bundle.
+{{DIAGRAMS_ERD}}
+Generated Prisma ERDs under the configured adapter output are never keeper-edited. Follow `rule://diagrams`'s generated-ERD guidance instead; generation and sync checks need no MCP.
+{{/DIAGRAMS_ERD}}

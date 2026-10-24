@@ -79,3 +79,10 @@ Plan `areas:` accepts single-line inline sequences and block list items. Quote i
 `bun tools/diagram-check.ts [files]` defaults to this home. Exit 0 prints file/element counts; exit 1 names failures: (1) XML/page/compression; (2) layers/chains; (3) ids/wrappers/metadata/components; (4) source containment/existence; (5) mapped decisions; (6) intent syntax for tracking mode; (7) layer style; (8) endpoints/visibility; (9) overlap; (10) page bounds; (11) font sizes; (12) when system.drawio exists, non-legend as-built/retiring coverage for every configured component; (13) legend isolation.
 
 Topology edits use the diagrams skill and diagram-keeper with the mounted drawio MCP. Validation, projections and comparisons work offline. The contract is a project-owned starter; installed tool/rule/skill baselines stay kit-owned. Core does not ship a schema generator.
+{{DIAGRAMS_ERD}}
+
+## Enabled Prisma adapter
+
+This installation additionally selects `diagrams.erd`. Its output is generated-only, never keeper-edited: see the generated-ERD section of `docs/process/diagrams.md` for generation, read-only sync checks, file selection and verification-command integration. The optional adapter adds a conditional exception to core comparison: only its marked generated files, inside its safe configured output and matching a passing full sync check for the compared snapshot, are exempt from declarations. Other folders, disabled adapters and stale output retain the core contract.
+Implicit many-to-many lists pair by relation name or a single unnamed back-reference; ambiguous pairings fail with schema path and line. Cross-file targets retain source references. Connectors preserve one-to-one uniqueness, many-to-many cardinality, and explicit `onDelete`/`onUpdate` actions. Schema globs exclude dependency directories named `node_modules`; mapped names require positional string arguments.
+{{/DIAGRAMS_ERD}}

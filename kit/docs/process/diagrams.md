@@ -23,3 +23,11 @@ Read when: planning or implementing architectural changes, reviewing diagram del
 - Audit stale/missing intent and architecture-shaped work without elements as a scoped human digest, never by querying a tracker in CI.
 # Light path
 - Architectural light-path changes update as-built through the keeper on the same branch and carry the worktree delta in the commit body. A new element absent from intent is a direction change routed to `rule://plan-triage`.
+{{DIAGRAMS_ERD}}
+# Generated Prisma ERDs
+- The enabled `diagrams.erd` adapter owns its configured output exclusively; generated ERDs are marked generated-only and the keeper never edits them. Single-file and split Prisma schemas are supported without a running MCP.
+- On schema changes run `bun tools/erd-generate.ts`, then `bun tools/erd-generate.ts --check` and `bun tools/diagram-check.ts` through the project's declared verification command. This is schema visualization only, not a migration or database procedure.
+- `--check` is read-only and names missing, changed and unexpected outputs. `--file <schema>` selects a repo-relative input or an unambiguous path suffix, isolates its output and performs no orphan cleanup; references still resolve across all inputs.
+- Output must be a safe directory strictly inside the diagrams home, never a kit-file collision. Full generation removes only orphan files bearing both the generated suffix and marker. Other files remain and fail sync.
+- Declaration comparison exempts only generated outputs of this enabled adapter when its full sync check passes for the compared snapshot; disabling the adapter or any drift restores ordinary declaration requirements.
+{{/DIAGRAMS_ERD}}

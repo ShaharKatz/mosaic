@@ -8,6 +8,8 @@ import { realpathWithinRoot } from "./tools/root-containment.ts";
 import { headingAnchors } from "./tools/specialists.ts";
 import { validateRunner, validateTesting } from "./tools/constants/codex-review.ts";
 import type { Runner, TestEntry } from "./tools/constants/codex-review.ts";
+import { BUNDLE_FILES as ERD_FILES, validateErd } from "./tools/constants/erd.ts";
+import type { Erd } from "./tools/constants/erd.ts";
 
 type Member = { name: string; path: string; stack: string; testCommand: string; coverageNote: string; testRunner?: Runner };
 type Tracking = { mode: "none" | "local" | "mcp"; mcp?: { server: string; team?: string; queue?: string } };
@@ -22,7 +24,7 @@ type Manifest = {
   git: { defaultBranch: string };
   tracking: Tracking;
   landing: Landing;
-  diagrams?: { mode: "none" | "drawio"; root?: string };
+  diagrams?: { mode: "none" | "drawio"; root?: string; erd?: Erd };
   remotes: { link: string; members: Record<string, string> };
   members: Member[];
   components: Member[];
@@ -77,13 +79,14 @@ function manifestFrom(value: unknown): Manifest {
   let diagrams: Manifest["diagrams"];
   if (value.diagrams !== undefined) {
     if (!record(value.diagrams) || !["none", "drawio"].includes(value.diagrams.mode as string)) throw new Error("diagrams.mode must be none or drawio");
+    if (value.diagrams.erd !== undefined && value.diagrams.mode !== "drawio") throw new Error("diagrams.erd requires drawio mode");
     if (value.diagrams.mode === "none") {
       if (value.diagrams.root !== undefined) throw new Error("diagrams.root requires drawio mode");
       diagrams = { mode: "none" };
     } else {
       const root = value.diagrams.root ?? DIAGRAMS_ROOT;
       if (!safeRoot(root)) throw new Error("diagrams.root must be a safe repo-relative directory");
-      diagrams = { mode: "drawio", root };
+      diagrams = { mode: "drawio", root, ...(value.diagrams.erd !== undefined ? { erd: value.diagrams.erd as Erd } : {}) };
     }
   }
   line(value.project.name, "project.name");
@@ -120,6 +123,7 @@ function manifestFrom(value: unknown): Manifest {
       }
     }
   }
+  if (diagrams?.erd !== undefined) validateErd(diagrams.erd, diagrams.root!, (topology === "monorepo" ? components : value.members).map((entry: Member) => entry.path.replace(/\/+$/, "")));
   if (value.standards !== undefined) {
     if (!Array.isArray(value.standards)) throw new Error("standards must be an array");
     const names = new Set<string>();
@@ -288,6 +292,10 @@ function render(content: string, file: string, manifest: Manifest): string {
       (_match, body: string) => manifest.diagrams?.mode === "drawio" ? body : "")
     .replace(/\{\{DIAGRAMS_DRAWIO\}\}([\s\S]*?)\{\{\/DIAGRAMS_DRAWIO\}\}/g,
       (_match, body: string) => manifest.diagrams?.mode === "drawio" ? body : "")
+    .replace(/^\{\{DIAGRAMS_ERD\}\}\n([\s\S]*?)^\{\{\/DIAGRAMS_ERD\}\}\n?/gm,
+      (_match, body: string) => manifest.diagrams?.erd ? body : "")
+    .replace(/\{\{DIAGRAMS_ERD\}\}([\s\S]*?)\{\{\/DIAGRAMS_ERD\}\}/g,
+      (_match, body: string) => manifest.diagrams?.erd ? body : "")
     .replace(/\{\{(MULTI_REPO|MONOREPO)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
       (_match, topology: string, body: string) => topology === (manifest.topology === "monorepo" ? "MONOREPO" : "MULTI_REPO") ? body : "")
     .replace(/^\{\{(PR_EVIDENCE|SPECIALISTS|FRONTEND_REVIEW)\}\}\n([\s\S]*?)^\{\{\/\1\}\}\n?/gm,
@@ -415,6 +423,19 @@ export async function install(options: { manifest: string; target: string; kit?:
       if (!candidates.some(file => !file.split("/").some(part => part === ".git" || part === "node_modules"))) throw new Error(`Specialist glob matches no project file: ${glob}`);
     }
   }
+  if (!manifest.diagrams?.erd) for (const file of ERD_FILES) entries.delete(file);
+  else {
+    const outputKey = diagramPathKey(manifest.diagrams.erd.output);
+    for (const [name, entry] of entries) {
+      const key = diagramPathKey(name);
+      if (key === outputKey || key.startsWith(outputKey + "/") || (entry.kind !== "directory" && outputKey.startsWith(key + "/"))) throw new Error(`diagrams.erd.output collides with kit file ${name}`);
+    }
+    // Preflight an existing output's ancestors too, even though no outputs are installed.
+    for (let candidate = join(target, manifest.diagrams.erd.output); candidate !== target; candidate = dirname(candidate)) {
+      const stat = await existing(candidate);
+      if (stat && !stat.isDirectory()) throw new Error(`ERD output ancestor is not a real directory: ${candidate}`);
+    }
+  }
   if (manifest.tracking.mode !== "local") {
     for (const name of entries.keys()) {
       if (name === "tools/tracker.ts" || name === "docs/tracker" || name.startsWith("docs/tracker/")
@@ -522,7 +543,8 @@ export async function install(options: { manifest: string; target: string; kit?:
         ...(manifest.topology === "multi-repo" ? manifest.members.map(member => ({ name: member.name, path: member.path.replace(/\/+$/, ""), remote: manifest.remotes.members[member.name] })) : []),
       ] } : {}),
       ...(manifest.diagrams?.mode === "drawio" ? { diagrams: { mode: "drawio", root: manifest.diagrams.root,
-        components: (manifest.topology === "monorepo" ? manifest.components : manifest.members).map(member => member.path.replace(/\/+$/, "")) } } : {}),
+        components: (manifest.topology === "monorepo" ? manifest.components : manifest.members).map(member => member.path.replace(/\/+$/, "")),
+        ...(manifest.diagrams.erd ? { erd: manifest.diagrams.erd } : {}) } } : {}),
     }, null, 2)}\n`);
   }
   const targetStat = await existing(target);
