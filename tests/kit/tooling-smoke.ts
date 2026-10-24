@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { deepStrictEqual, ok, strictEqual } from "node:assert";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { install } from "../../kit/install.ts";
@@ -33,6 +33,42 @@ try {
 	run([bun, "tools/doctor.ts"], 0);
 	deepStrictEqual(JSON.parse(run([bun, "tools/checkup.ts", "--json"], 0)), { findings: [], cannotEvaluate: [] });
 	console.log("PASS fresh two-component monorepo: doctor and checkup");
+
+	ok(!existsSync(join(target, ".git")), "gate smoke uses an installed root without git history");
+	put("docs/plans/archived/0999-gate.md", "# Archived gate probe\n");
+	const orphanOnly = JSON.parse(run([bun, "tools/checkup.ts", "--json"], 1));
+	deepStrictEqual(orphanOnly.cannotEvaluate, []);
+	deepStrictEqual(orphanOnly.findings.map((finding: { class: string }) => finding.class), ["orphan-plan"]);
+	const gateText = run([bun, "tools/checkup.ts", "--gate", "--root", target], 0);
+	ok(gateText.includes("orphan-plan") && gateText.includes("informational; gate-exempt"), gateText);
+	ok(gateText.includes("checkup: PASS — 1 findings, 0 cannot-evaluate, 1 gate-exempt\n"), gateText);
+	deepStrictEqual(JSON.parse(run([bun, "tools/checkup.ts", "--gate", "--json"], 0)), orphanOnly);
+	console.log("PASS checkup gate: orphan-only plain exit 1, gate exit 0, unchanged JSON; no git repository/history");
+
+	put("docs/gate.md", "G-999 has no gap entry.\n");
+	const gateReference = JSON.parse(run([bun, "tools/checkup.ts", "--json", "--gate"], 1));
+	deepStrictEqual(gateReference.cannotEvaluate, []);
+	ok(gateReference.findings.some((finding: { class: string; fix: string }) => finding.class === "dangling-reference" && finding.fix === "human"));
+	ok(gateReference.findings.some((finding: { class: string }) => finding.class === "orphan-plan"));
+	rmSync(join(target, "docs/gate.md"));
+	put("docs/plans/0998-gate.md", "---\nstatus: draft\n---\n# Incomplete numbered plan\n");
+	const gateLint = JSON.parse(run([bun, "tools/checkup.ts", "--gate", "--json"], 1));
+	deepStrictEqual(gateLint.cannotEvaluate, []);
+	ok(gateLint.findings.some((finding: { class: string; fix: string }) => finding.class === "lint" && finding.fix === "human"));
+	rmSync(join(target, "docs/plans/0998-gate.md"));
+	console.log("PASS checkup gate: human-fix dangling-reference and lint findings still fail, even with exempt orphans");
+
+	const missingRoot = join(scratch, "missing-root");
+	const incomplete = JSON.parse(run([bun, "tools/checkup.ts", "--root", missingRoot, "--json"], 2));
+	ok(incomplete.cannotEvaluate.some((item: { detail: string }) => item.detail.includes("cannot enumerate root")));
+	deepStrictEqual(JSON.parse(run([bun, "tools/checkup.ts", "--gate", "--root", missingRoot, "--json"], 2)), incomplete);
+	symlinkSync(join(scratch, "missing-input"), join(target, "docs/gate-unreadable.md"));
+	const gateIncomplete = JSON.parse(run([bun, "tools/checkup.ts", "--gate", "--json"], 2));
+	ok(gateIncomplete.cannotEvaluate.some((item: { path: string }) => item.path === "docs/gate-unreadable.md"));
+	ok(gateIncomplete.findings.some((finding: { class: string }) => finding.class === "orphan-plan"));
+	rmSync(join(target, "docs/gate-unreadable.md"));
+	rmSync(join(target, "docs/plans/archived/0999-gate.md"));
+	console.log("PASS checkup gate: bad root and unreadable input exit 2; incomplete JSON shape unchanged");
 
 	for (const file of ["view.tsx", "Makefile", ".github/workflows/check.yml", "docs/diagram.drawio", ".claude/assets/font.ttf", "image.png"]) {
 		put(file, file.endsWith(".png") || file.endsWith(".ttf") ? new Uint8Array([0, 255, 123, 123]) : "{{project syntax}}\n");
