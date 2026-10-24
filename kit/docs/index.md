@@ -38,7 +38,7 @@
 | [records-guard](process/records-guard.md) | Governed-edit reminder | Before matching edits/writes; interrupt-scoped |
 | [mosaic-core](process/mosaic-core.md) | Integrity, authority, evidence | Always applied |
 | [model-notes](process/model-notes.md) | Deferred family prompts | Model configuration; human decides placement |
-## Repo map
+{{STANDARDS}}## Repo map
 | Path | Contents |
 |---|---|
 | Project entry | Current runtime's authority and session instructions |

@@ -13,6 +13,19 @@ Weigh both directions per row: what installed kit text would change, what target
 Every non-`done` row belongs to an actual plan task or the report's Human rulings list; `mechanical` is only for already verified `done` rows. Cite row IDs in task acceptance, evidence, and the brief's **Concept alignment** section (resolved / needing a ruling).
 A human-owned choice is not resolved by taking a conservative guess. Record the question and affected actions, stop those actions, retain the supplied answer, then assign its implementation to a plan task; mark done only with evidence.
 
+## Opt-in standards survey and placement
+
+Offer `excluded-data`, `no-magic-strings`, `shared-first`, and `testing` individually; no selection is implicit.
+Derive each proposed scope from surveyed members/components' actual source and test paths and show the globs to the human for confirmation.
+Record selected manifest entries (`name`, `paths`, optional excluded-data `dir` or shared-first `designSystem`) and equivalent existing standards as alignment rows.
+Merge equivalent standards into one canonical authority and move them losslessly to `docs/standards/<name>.md`, preserving project requirements and repairing inbound links and scoped pointers rather than installing duplicates.
+Each selected standard has canonical `docs/standards/<name>.md`, Claude `paths:` and omp edit/write-scoped rule twins, and a Standards index row.
+Leave testing's project-owned **Surfaces** section empty for the project to fill; its generic instructions read the real stack commands.
+When excluded-data is selected, phase 3 adds the one anchored folder ignore line (default `/excluded_data/`), preserving existing entries; the helper never edits `.gitignore`. In multi-repo projects, choose the folder inside the repo whose scripts write the data and add the ignore line in that repo, not the link repo that ignores the member. Record the manifest directory relative to the installation root and the ignore line relative to its owning repo.
+Route data outputs there instead of adding per-path ignores. Credentials retain existing secrets handling. Verify `git check-ignore -q <dir>/` in the folder's owning repo, with its owner-relative path; doctor resolves that repo from the nearest existing ancestor and reports cannot-evaluate for this check alone without a git repository.
+Doctor treats an unmatched glob as FAIL when repository inventory is complete, because stale scope silently disables enforcement; with unavailable repositories it reports cannot-evaluate and names them instead. Reconcile scopes and restore inventory coverage before claiming installation complete.
+
+
 ## Tracking survey and H-tracking
 
 Inspect `mcpServers` in `~/.omp/agent/mcp.json` and target `.omp/mcp.json`, plus user/project Claude `.claude/settings.json` and `.mcp.json`. Distinguish a configured server from tracker tools mounted in the session; retain runtime server names and access evidence, never credentials.

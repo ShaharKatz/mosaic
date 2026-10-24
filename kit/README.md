@@ -144,6 +144,9 @@ The skill supplies every value from survey evidence; source Markdown uses these 
 | `LANDING_DIRECT` / `LANDING_PULL_REQUEST` | Landing blocks with slash-prefixed closing tokens; selected after tracking and before topology; may contain topology blocks |
 | `CLOSE_OUT_TWO_COMMIT` / `CLOSE_OUT_DEFAULT` | Close-out blocks with slash-prefixed closing tokens; selected after landing and before topology; opt-in two-commit layout or unchanged default layout |
 | `MULTI_REPO` / `MONOREPO` | Non-nested topology blocks selected after tracking and landing blocks; then expand value tokens |
+| `STANDARDS` | Optional Standards section and selected canonical links; empty when none selected |
+| `STANDARD_PATHS` / `STANDARD_SCOPE` | JSON-quoted Claude paths list / one-line JSON sequence of complete omp edit-write scope tokens |
+| `EXCLUDED_DATA_DIR` / `DESIGN_SYSTEM` | Selected excluded-data directory / shared-first design-system location or generic fallback |
 
 The following examples document the schema consumed by the mechanical helper, not human setup
 steps. A multi-repo record has at least one member:
@@ -208,6 +211,45 @@ Tracking accepts `{ "mode": "local" }` or `{ "mode": "mcp", "mcp": { "server": "
 Landing accepts `{ "mode": "pull-request", "host": "github" }` instead of direct; host is required (GitHub only) in pull-request mode and rejected in direct mode. The H3 survey selects pull-request from branch protection requiring PRs on the default branch, merged PRs on it, or documented PR flow, deriving the host from the remote. Direct pushes with no PRs select direct; conflicting or absent evidence requires a human question, never a default. Tracking blocks are resolved first, then landing blocks, then topology and values; tracking and landing may contain each other and topology, never same-family nesting or mode blocks inside topology blocks.
 Optional `landing.closeOut: "two-commit"` is accepted only in pull-request mode; unknown values and direct-mode use are rejected. Select it only from project history showing squash-then-close-out commits or the human's choice, never by default. Absence preserves today's layout, including older runtime metadata. Render close-out blocks after landing and before topology/values. The task branch becomes one code commit (plan subject, task subjects in its body) before opening the pull request, followed by one close-out commit carrying its locator and all repo-owned terminal documentation; later review/CI code corrections use fixup/autosquash, keeping close-out last. Member-homed plans keep R4's link-repo ledger sync after the member merges.
 
+### Opt-in team standards
+
+Offer all four standards during survey, selecting only what the human confirms:
+`excluded-data`, `no-magic-strings`, `shared-first`, and `testing`.
+The optional `standards` array contains unique entries with `name` and a nonempty `paths` list.
+Globs are repository-relative single-line strings without backslashes, parentheses, or `.`/`..` segments.
+Derive globs from surveyed source/test paths and show them to the human, rather than guessing from a language alone.
+Only excluded-data accepts `dir` (default `excluded_data`), a relative directory of letters, digits,
+underscores, hyphens and `/` separators. Only shared-first accepts the optional single-line
+`designSystem` location; omission says "the project's design system or shared component library, if any".
+For example:
+
+```json
+{
+  "standards": [
+    { "name": "excluded-data", "paths": ["src/**"], "dir": "excluded_data" },
+    { "name": "no-magic-strings", "paths": ["src/**/*.ts", "tests/**/*.ts"] },
+    { "name": "shared-first", "paths": ["src/**/*.tsx"], "designSystem": "packages/design-system" },
+    { "name": "testing", "paths": ["tests/**"] }
+  ]
+}
+```
+
+Each selected standard installs canonical `docs/standards/<name>.md` plus short ordinary scoped rules
+in both ports: Claude `paths:` and omp edit/write `scope`, following records-guard's runtime idioms.
+Only selected standards get an index row and runtime metadata. Missing/empty list installs nothing.
+Testing points to the project's stack commands and leaves a project-owned **Surfaces** section empty.
+Merge an equivalent existing project standard, move it losslessly to `docs/standards/<name>.md`,
+and repair its inbound links rather than creating a second authority.
+For excluded-data, `/mosaic-install` adds one anchored folder ignore line; the helper never changes
+`.gitignore`. In multi-repo projects, choose the folder inside the repo whose scripts write the data;
+the folder and ignore line belong to that repo, not the link repo that ignores the member.
+The manifest directory is installation-root-relative; the ignore line is relative to its owning repo.
+Data goes into that folder instead of new per-path ignore entries; credentials use existing secrets handling.
+Doctor fails for missing files, wrong pointers/scopes, or globs matching no non-ignored repository file when inventory is complete.
+It uses installation-relative Git inventories when available, with a filesystem fallback without git; unmatched globs with incomplete inventory are cannot-evaluate and name the unavailable repositories.
+It resolves the folder's owning repo from its nearest existing ancestor and checks
+`git check-ignore -q <dir>/` there (owner-relative path; cannot-evaluate without git).
+
 ### Mechanical helper: greenfield/manual path
 
 For a greenfield repo, a human may still supply this schema and call the helper directly from the
@@ -218,9 +260,9 @@ bun kit/install.ts --manifest "/path/to/manifest.json" --target "/path/to/projec
 bun kit/tools/doctor.ts --root "/path/to/project"
 ```
 
-The helper renders Markdown, preserves modes, and creates `.omp/rules/*.md` as relative symlinks
-to `../../docs/process/*.md`; Claude rule files are ordinary files. It does not clone members,
-initialize git, configure remotes, or edit `.gitignore`. Git, Bash, Python 3 for Claude hooks, and
+The helper renders Markdown, preserves modes, and creates shared process `.omp/rules/*.md` as relative symlinks
+to `../../docs/process/*.md`; scoped standard rules in both ports are ordinary files.
+It does not clone members, initialize git, configure remotes, or edit `.gitignore`. Git, Bash, Python 3 for Claude hooks, and
 the project's test runners are needed for the corresponding installed workflows.
 Changed destination files are refused before writes unless `--force` is given; identical installs
 are no-ops. `--overlay <dir>` replaces same-path files in full after rendering, without merging or

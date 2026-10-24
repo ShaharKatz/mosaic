@@ -7,6 +7,8 @@ import { parseArgs } from "node:util";
 type Member = { name: string; path: string; stack: string; testCommand: string; coverageNote: string };
 type Tracking = { mode: "none" | "local" | "mcp"; mcp?: { server: string; team?: string; queue?: string } };
 type Landing = { mode: "direct"; host?: never; closeOut?: never } | { mode: "pull-request"; host: "github"; closeOut?: "two-commit" };
+type Standard = { name: "excluded-data" | "no-magic-strings" | "shared-first" | "testing"; paths: string[]; dir?: string; designSystem?: string };
+const standardNames = ["excluded-data", "no-magic-strings", "shared-first", "testing"];
 type Manifest = {
   project: { name: string; summary: string };
   topology: "multi-repo" | "monorepo";
@@ -16,6 +18,7 @@ type Manifest = {
   remotes: { link: string; members: Record<string, string> };
   members: Member[];
   components: Member[];
+  standards?: Standard[];
 };
 type Entry = { kind: "directory"; mode: number } | { kind: "file"; mode: number; content: Buffer }
   | { kind: "symlink"; target: string };
@@ -88,11 +91,38 @@ function manifestFrom(value: unknown): Manifest {
       if (label === "members" && topology === "multi-repo") line(remotes[name], `remotes.members.${name}`);
     }
   }
+  if (value.standards !== undefined) {
+    if (!Array.isArray(value.standards)) throw new Error("standards must be an array");
+    const names = new Set<string>();
+    for (const [index, entry] of value.standards.entries()) {
+      const field = `standards[${index}]`;
+      if (!record(entry) || !standardNames.includes(entry.name as string) || names.has(entry.name as string)) {
+        throw new Error(`${field}.name must be a supported, unique standard`);
+      }
+      names.add(entry.name as string);
+      if (!Array.isArray(entry.paths) || !entry.paths.length) throw new Error(`${field}.paths must be a nonempty array`);
+      for (const glob of entry.paths) {
+        line(glob, `${field}.paths`);
+        if (isAbsolute(glob) || glob.includes("\\") || glob.split("/").some(part => part === ".." || part === ".")
+          || /[()]/.test(glob)) throw new Error(`${field}.paths must contain repository-relative globs without parentheses`);
+      }
+      if (entry.dir !== undefined) {
+        if (entry.name !== "excluded-data") throw new Error(`${field}.dir is only valid for excluded-data`);
+        line(entry.dir, `${field}.dir`);
+        if (!/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(entry.dir)) throw new Error(`${field}.dir must be a repository-relative directory`);
+      }
+      if (entry.designSystem !== undefined) {
+        if (entry.name !== "shared-first") throw new Error(`${field}.designSystem is only valid for shared-first`);
+        line(entry.designSystem, `${field}.designSystem`);
+      }
+    }
+  }
   return {
     project: value.project as Manifest["project"], topology, git: { defaultBranch }, tracking: tracking as Tracking,
     landing: landing as Landing,
     remotes: { link: value.remotes.link, members: remotes as Record<string, string> },
     members: value.members as Member[], components: components as Member[],
+    ...(value.standards !== undefined ? { standards: value.standards as Standard[] } : {}),
   };
 }
 function memberPath(member: Member): string { return `${member.path.replace(/\/+$/, "")}/`; }
@@ -141,6 +171,7 @@ function membersFor(file: string, manifest: Manifest): string {
   }
 }
 function render(content: string, file: string, manifest: Manifest): string {
+  const standard = manifest.standards?.find(entry => file.endsWith(`/${entry.name}.md`));
   // Resolve tracking, landing, close-out, topology, then values. Own-line tags consume their newline.
   const keep = (mode: string) => mode === `TRACKING_${manifest.tracking.mode.toUpperCase()}`;
   const landingToken = manifest.landing.mode === "direct" ? "LANDING_DIRECT" : "LANDING_PULL_REQUEST";
@@ -170,6 +201,13 @@ function render(content: string, file: string, manifest: Manifest): string {
       case "MCP_TEAM": return manifest.tracking.mcp?.team ?? "not configured; resolve the target team before creating intent";
       case "MCP_QUEUE": return manifest.tracking.mcp?.queue ?? "not configured; obtain the H-tracking queue ruling before intake";
       case "MEMBERS": return membersFor(file, manifest);
+      case "STANDARDS": return manifest.standards?.length
+        ? `## Standards\n| Standard | Read when |\n|---|---|\n${manifest.standards.map(entry => `| [${entry.name}](standards/${entry.name}.md) | Editing files matching ${entry.paths.map(glob => `\`${cell(glob)}\``).join(", ")} |`).join("\n")}\n` : "";
+      case "STANDARD_PATHS": return standard!.paths.map(glob => `  - ${JSON.stringify(glob)}`).join("\n");
+      case "STANDARD_SCOPE": return JSON.stringify(standard!.paths.flatMap(glob => [`tool:edit(${glob})`, `tool:write(${glob})`]));
+      case "EXCLUDED_DATA_DIR": return manifest.standards?.find(entry => entry.name === "excluded-data")?.dir ?? "excluded_data";
+      case "DESIGN_SYSTEM": return manifest.standards?.find(entry => entry.name === "shared-first")?.designSystem
+        ?? "the project's design system or shared component library, if any";
       default:
         if (token.startsWith("MEMBER_REMOTE:")) return memberRemote(manifest, token);
         throw new Error(`Unknown placeholder ${token} in ${file}`);
@@ -181,6 +219,11 @@ function render(content: string, file: string, manifest: Manifest): string {
 async function collect(base: string, names: string[], entries: Map<string, Entry>, manifest?: Manifest): Promise<void> {
   for (const name of names) {
     const file = join(base, name);
+    if (manifest) {
+      const standardFile = /^(?:docs\/standards|\.omp\/rules|\.claude\/rules)\/([^/]+)\.md$/.exec(name);
+      if (standardFile && standardNames.includes(standardFile[1]!) && !manifest.standards?.some(entry => entry.name === standardFile[1])) continue;
+      if (name === "docs/standards" && !manifest.standards?.length) continue;
+    }
     const stat = await lstat(file);
     const previous = entries.get(name);
     if (!stat.isDirectory() && previous?.kind === "directory") {
@@ -226,6 +269,11 @@ export async function install(options: { manifest: string; target: string; kit?:
         || name === ".omp/agents/tracker-scout.md" || name === ".claude/agents/tracker-scout.md") entries.delete(name);
     }
   }
+  for (const name of entries.keys()) {
+    const standardFile = /^(?:docs\/standards|\.omp\/rules|\.claude\/rules)\/([^/]+)\.md$/.exec(name);
+    if (standardFile && standardNames.includes(standardFile[1]!) && !manifest.standards?.some(entry => entry.name === standardFile[1])) entries.delete(name);
+    if (name === "docs/standards" && !manifest.standards?.length) entries.delete(name);
+  }
   const config = entries.get(".omp/mosaic.json");
   if (config?.kind === "file") {
     let commit = options.kitCommit;
@@ -235,6 +283,12 @@ export async function install(options: { manifest: string; target: string; kit?:
     }
     config.content = Buffer.from(`${JSON.stringify({
       defaultBranch: manifest.git.defaultBranch, topology: manifest.topology, tracking: manifest.tracking, landing: manifest.landing, kit: { commit },
+      ...(manifest.standards?.length ? { standards: manifest.standards, repositories: [
+        { name: "link-repo", path: ".", remote: manifest.remotes.link },
+        ...(manifest.topology === "multi-repo" ? manifest.members.map(member => ({
+          name: member.name, path: member.path, remote: manifest.remotes.members[member.name],
+        })) : []),
+      ] } : {}),
     }, null, 2)}\n`);
   }
   const targetStat = await existing(target);

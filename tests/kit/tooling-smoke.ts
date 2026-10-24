@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { install } from "../../kit/install.ts";
@@ -19,6 +19,343 @@ function run(command: string[], code: number): string {
 }
 const bun = process.execPath;
 const manifest = join(scratch, "manifest.json");
+async function exerciseBraceScope(input: Record<string, unknown>): Promise<void> {
+	const fresh = join(scratch, "brace-scope");
+	const glob = "src/**/*.{ts,tsx}";
+	const tokens = [`tool:edit(${glob})`, `tool:write(${glob})`];
+	writeFileSync(manifest, JSON.stringify({ ...input, standards: [{ name: "testing", paths: [glob] }] }));
+	await install({ manifest, target: fresh });
+	mkdirSync(join(fresh, "src"));
+	writeFileSync(join(fresh, "src/a.ts"), "export const example = true;\n");
+	writeFileSync(join(fresh, "src/b.tsx"), "export const example = <div />;\n");
+	const rulePath = join(fresh, ".omp/rules/testing.md");
+	const rule = readFileSync(rulePath, "utf8");
+	const expectedScope = `scope: ${JSON.stringify(tokens)}`;
+	const failures: string[] = [];
+	for (const scenario of ["rendered-sequence", "legacy-comma-string", "drop-write", "missing-scope"]) {
+		writeFileSync(rulePath, scenario === "legacy-comma-string" ? rule.replace(/^scope:.*$/m, `scope: ${JSON.stringify(tokens.join(", "))}`)
+			: scenario === "drop-write" ? rule.replace(/^scope:.*$/m, `scope: ${JSON.stringify([tokens[0]])}`)
+			: scenario === "missing-scope" ? rule.replace(/^scope:.*\n/m, "") : rule);
+		const result = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		const output = result.stdout.toString();
+		const valid = scenario === "rendered-sequence"
+			? /^scope:.*$/m.exec(rule)?.[0] === expectedScope && result.exitCode === 0 && output === "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n"
+			: result.exitCode === 1 && output.includes("FAIL standards .omp/rules/testing.md:")
+				&& output.includes(scenario === "drop-write" ? "scope differs from installed standards metadata" : "cannot parse rendered scope");
+		console.log(`${valid ? "PASS" : "FAIL"} brace scope ${scenario}: exit ${result.exitCode}; ${output.trim()}`);
+		if (!valid) failures.push(`${scenario}: ${readFileSync(rulePath, "utf8")}\n${output}\n${result.stderr}`);
+	}
+	deepStrictEqual(failures, []);
+}
+async function exerciseFinalReviewRegressions(input: Record<string, unknown>): Promise<void> {
+	const failures: string[] = [];
+	for (const scenario of ["renamed-paths", "unrelated-frontmatter-list", "below-git-root", "unavailable-member-glob", "git-start-failure"]) {
+		const base = join(scratch, `final-${scenario}`);
+		const fresh = scenario === "below-git-root" ? join(base, "installed") : base;
+		const entry = scenario === "git-start-failure" ? { name: "excluded-data", paths: ["src/**"] }
+			: { name: "testing", paths: [scenario === "unavailable-member-glob" ? "missing-member/**/*.py" : "src/**"] };
+		writeFileSync(manifest, JSON.stringify({ ...input, ...(scenario === "unavailable-member-glob" ? {
+			topology: "multi-repo", components: [],
+			members: [{ name: "missing-member", path: "missing-member", stack: "Python", testCommand: "pytest", coverageNote: "" }],
+			remotes: { link: "https://example.invalid/link.git", members: { "missing-member": "https://example.invalid/member.git" } },
+		} : {}), standards: [entry] }));
+		await install({ manifest, target: fresh });
+		const init = Bun.spawnSync(["git", "init", "-b", "main"], { cwd: base, stdout: "pipe", stderr: "pipe" });
+		strictEqual(init.exitCode, 0, init.stderr.toString());
+		mkdirSync(join(fresh, "src"));
+		writeFileSync(join(fresh, "src/example.ts"), "export const example = true;\n");
+		const rulePath = join(fresh, `.claude/rules/${entry.name}.md`);
+		const rule = readFileSync(rulePath, "utf8");
+		if (scenario === "renamed-paths") writeFileSync(rulePath, rule.replace("paths:", "other:"));
+		if (scenario === "unrelated-frontmatter-list") writeFileSync(rulePath, rule.replace("---\n", '---\nother:\n  - "unrelated/**"\n'));
+		let command = [bun, "tools/doctor.ts"];
+		if (scenario === "git-start-failure") {
+			writeFileSync(join(fresh, "unavailable-git.ts"), `
+import { mock } from "bun:test";
+import * as childProcess from "node:child_process";
+const realSpawn = childProcess.spawnSync;
+mock.module("node:child_process", () => ({ ...childProcess, spawnSync: (...args) =>
+	args[0] === "git" && args[1][0] === "check-ignore"
+		? { status: null, stdout: null, stderr: null, error: new Error("spawn git ENOENT") }
+		: realSpawn(...args) }));
+// The external process boundary must be replaced before loading the CLI.
+await import("./tools/doctor.ts");
+`);
+			command = [bun, "unavailable-git.ts"];
+		}
+		const result = Bun.spawnSync(command, { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		const output = result.stdout.toString();
+		const expectedCode = scenario === "renamed-paths" ? 1 : scenario === "unavailable-member-glob" || scenario === "git-start-failure" ? 2 : 0;
+		const valid = result.exitCode === expectedCode && (scenario === "renamed-paths"
+			? output.includes(`FAIL standards .claude/rules/${entry.name}.md:`)
+			: scenario === "unavailable-member-glob"
+				? !output.includes("FAIL ") && output.includes("cannot evaluate glob missing-member/**/*.py") && output.includes("unavailable repositories: missing-member")
+				: scenario === "git-start-failure" ? output.includes("CANNOT-EVALUATE excluded-data-ignore") && !result.stderr.toString().includes("TypeError")
+					: output === "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+		console.log(`${valid ? "PASS" : "FAIL"} final-review regression ${scenario}: exit ${result.exitCode}; ${output.trim()}`);
+		if (!valid) failures.push(`${scenario}: expected ${expectedCode}; got ${result.exitCode}\n${output}\n${result.stderr}`);
+	}
+	deepStrictEqual(failures, []);
+}
+async function exerciseRepositoryPaths(input: Record<string, unknown>): Promise<void> {
+	const fresh = join(scratch, "repository-paths");
+	const member = "group/member-a";
+	const putFresh = (file: string, content: string) => {
+		mkdirSync(dirname(join(fresh, file)), { recursive: true });
+		writeFileSync(join(fresh, file), content);
+	};
+	const git = (cwd: string, ...args: string[]) => {
+		const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+		strictEqual(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
+	};
+	const inputWithMembers = {
+		...input, topology: "multi-repo", components: [],
+		members: [{ name: "member-a", path: member, stack: "Python", testCommand: "pytest", coverageNote: "" }],
+		remotes: { link: "https://example.invalid/link.git", members: { "member-a": "https://example.invalid/member.git" } },
+		standards: [{ name: "testing", paths: ["**/*.py"] }],
+	};
+	writeFileSync(manifest, JSON.stringify(inputWithMembers));
+	await install({ manifest, target: fresh });
+	git(fresh, "init", "-b", "main");
+	putFresh(".gitignore", "/group/\n");
+	mkdirSync(join(fresh, member), { recursive: true });
+	git(join(fresh, member), "init", "-b", "main");
+	putFresh(`${member}/src/example.py`, "example = True\n");
+	const metadata = JSON.parse(readFileSync(join(fresh, ".omp/mosaic.json"), "utf8"));
+	deepStrictEqual(metadata.repositories, [
+		{ name: "link-repo", path: ".", remote: inputWithMembers.remotes.link },
+		{ name: "member-a", path: member, remote: inputWithMembers.remotes.members["member-a"] },
+	]);
+	const wildcard = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+	strictEqual(wildcard.exitCode, 0, `${wildcard.stdout}\n${wildcard.stderr}`);
+	strictEqual(wildcard.stdout.toString(), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+	console.log("PASS repository inventory: **/*.py matches only a nested ignored member's non-ignored file");
+
+	writeFileSync(manifest, JSON.stringify({ ...inputWithMembers, standards: [
+		...inputWithMembers.standards, { name: "excluded-data", paths: ["**/*.py"], dir: `${member}/data-link/new/output` },
+	] }));
+	await install({ manifest, target: fresh, force: true });
+	putFresh(`${member}/.gitignore`, "/data/\n");
+	mkdirSync(join(fresh, member, "data"));
+	symlinkSync("data", join(fresh, member, "data-link"));
+	const link = join(scratch, "installed-tree-link");
+	symlinkSync(fresh, link);
+	const symlinked = Bun.spawnSync([bun, join(fresh, "tools/doctor.ts"), "--root", link],
+		{ cwd: scratch, stdout: "pipe", stderr: "pipe" });
+	strictEqual(symlinked.exitCode, 0, `${symlinked.stdout}\n${symlinked.stderr}`);
+	strictEqual(symlinked.stdout.toString(), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+	ok(!existsSync(join(fresh, member, "data/new/output")), "ignore verification does not create the destination");
+	console.log("PASS physical paths: symlinked --root from another cwd, symlinked data ancestor and missing destination suffix; doctor 0/0/0");
+
+	const complete = JSON.parse(readFileSync(join(fresh, ".omp/mosaic.json"), "utf8"));
+	putFresh(".omp/mosaic.json", JSON.stringify({ ...complete, repositories: [
+		...complete.repositories, { name: "missing-member", path: "group/missing-member", remote: "https://example.invalid/missing.git" },
+	] }));
+	const missing = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+	strictEqual(missing.exitCode, 2, `${missing.stdout}\n${missing.stderr}`);
+	ok(missing.stdout.toString().includes("CANNOT-EVALUATE standards group/missing-member:"));
+	ok(missing.stdout.toString().includes("doctor: 0 fail, 0 warn, 1 cannot-evaluate"));
+	console.log("PASS repository availability: a missing member alone is cannot-evaluate; available member scopes still match");
+}
+async function exerciseStandardRegressions(input: Record<string, unknown>): Promise<void> {
+	const failures: string[] = [];
+	for (const scenario of ["member-ignore", "member-source-glob", "file-only-ignore", "folder-ignore", "edit-without-write", "missing-file", "ignored-only-glob"]) {
+		const fresh = join(scratch, `regression-${scenario}`);
+		const entry = scenario.endsWith("ignore")
+			? { name: "excluded-data", paths: ["src/**"], dir: scenario === "member-ignore" ? "member-a/excluded_data" : "excluded_data" }
+			: { name: "testing", paths: [scenario === "ignored-only-glob" ? ".venv/**/*.ts" : scenario === "member-source-glob" ? "member-a/src/**" : "src/**"] };
+		writeFileSync(manifest, JSON.stringify({ ...input, ...(scenario.startsWith("member-") ? {
+			topology: "multi-repo", components: [],
+			members: [{ name: "member-a", path: "member-a", stack: "TypeScript", testCommand: "bun test", coverageNote: "" }],
+			remotes: { link: "https://example.invalid/link.git", members: { "member-a": "https://example.invalid/member.git" } },
+		} : {}), standards: [entry] }));
+		await install({ manifest, target: fresh });
+		const putFresh = (file: string, content: string) => {
+			mkdirSync(dirname(join(fresh, file)), { recursive: true });
+			writeFileSync(join(fresh, file), content);
+		};
+		const git = (cwd: string, ...args: string[]) => {
+			const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe",
+				env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
+			strictEqual(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
+		};
+		git(fresh, "init", "-b", "main");
+		putFresh("src/example.ts", "export const example = true;\n");
+		if (scenario === "member-ignore" || scenario === "member-source-glob") {
+			putFresh(".gitignore", "/member-a/\n");
+			mkdirSync(join(fresh, "member-a"));
+			git(join(fresh, "member-a"), "init", "-b", "main");
+			putFresh("member-a/src/example.ts", "export const example = true;\n");
+		}
+		if (scenario === "file-only-ignore") putFresh(".gitignore", "/excluded_data/x\n");
+		if (scenario === "folder-ignore") putFresh(".gitignore", "/excluded_data/\n");
+		if (scenario === "edit-without-write") {
+			const rule = `.omp/rules/${entry.name}.md`;
+			putFresh(rule, readFileSync(join(fresh, rule), "utf8").replaceAll("tool:write(", "tool:edit("));
+		}
+		if (scenario === "missing-file") rmSync(join(fresh, `docs/standards/${entry.name}.md`));
+		if (scenario === "ignored-only-glob") {
+			putFresh(".gitignore", "/.venv/\n/node_modules/\n");
+			putFresh(".venv/example.ts", "export const ignored = true;\n");
+			putFresh("node_modules/example.ts", "export const ignored = true;\n");
+		}
+		const result = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		const output = result.stdout.toString();
+		const expectedCode = scenario === "folder-ignore" || scenario === "member-source-glob" ? 0 : 1;
+		const expectedDetail = scenario.endsWith("ignore") && scenario !== "folder-ignore" ? "FAIL excluded-data-ignore"
+			: scenario === "edit-without-write" ? "scope differs from installed standards metadata"
+			: scenario === "missing-file" ? "installed standard file is missing"
+			: scenario === "ignored-only-glob" ? "glob matches no repository file: .venv/**/*.ts"
+			: "doctor: 0 fail, 0 warn, 0 cannot-evaluate";
+		if (result.exitCode !== expectedCode || !output.includes(expectedDetail)) {
+			failures.push(`${scenario}: expected exit ${expectedCode} and ${expectedDetail}; got exit ${result.exitCode}\n${output}\n${result.stderr}`);
+		}
+		console.log(`${result.exitCode === expectedCode && output.includes(expectedDetail) ? "PASS" : "FAIL"} standard regression ${scenario}: exit ${result.exitCode}; ${output.trim()}`);
+		if (scenario === "member-ignore") {
+			putFresh("member-a/.gitignore", "/excluded_data/\n");
+			const ignored = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+			strictEqual(ignored.exitCode, 0, `${ignored.stdout}\n${ignored.stderr}`);
+		}
+	}
+	deepStrictEqual(failures, []);
+}
+async function exerciseStandards(input: Record<string, unknown>): Promise<void> {
+	const names = ["excluded-data", "no-magic-strings", "shared-first", "testing"];
+	const snapshot = (root: string): Record<string, string> => {
+		const result: Record<string, string> = {};
+		for (const file of new Bun.Glob("**/*").scanSync({ cwd: root, dot: true, onlyFiles: false })) {
+			const stat = lstatSync(join(root, file));
+			result[file] = stat.isSymbolicLink() ? `link:${readlinkSync(join(root, file))}`
+				: stat.isDirectory() ? `directory:${stat.mode & 0o777}` : `${stat.mode & 0o777}:${readFileSync(join(root, file)).toString("base64")}`;
+		}
+		return result;
+	};
+	let expected: Record<string, string> | undefined;
+	for (const standards of [undefined, []]) {
+		const fresh = join(scratch, standards ? "standards-empty" : "standards-omitted");
+		writeFileSync(manifest, JSON.stringify({ ...input, standards }));
+		await install({ manifest, target: fresh, kitCommit: "compatibility" });
+		if (expected) deepStrictEqual(snapshot(fresh), expected);
+		else expected = snapshot(fresh);
+		ok(!existsSync(join(fresh, "docs/standards")), "no standards directory");
+		for (const name of names) for (const port of [".omp", ".claude"]) {
+			ok(!existsSync(join(fresh, `${port}/rules/${name}.md`)), "no scoped standard rule");
+		}
+		ok(!readFileSync(join(fresh, "docs/index.md"), "utf8").includes("## Standards\n"));
+		ok(!Object.hasOwn(JSON.parse(readFileSync(join(fresh, ".omp/mosaic.json"), "utf8")), "repositories"));
+		ok(!Object.hasOwn(JSON.parse(readFileSync(join(fresh, ".omp/mosaic.json"), "utf8")), "standards"));
+		const doctor = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
+		strictEqual(doctor.exitCode, 0, `${doctor.stdout}\n${doctor.stderr}`);
+		strictEqual(doctor.stdout.toString(), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+	}
+	console.log("PASS standards omitted/empty: identical bytes, modes, paths, symlinks and metadata; no standard files/navigation/config; doctor 0/0/0");
+	await exerciseRepositoryPaths(input);
+	await exerciseStandardRegressions(input);
+
+	for (const name of names) {
+		const fresh = join(scratch, `standard-${name}`);
+		const paths = ["src/**/*.ts", "tests/**/*.ts"];
+		const entry = { name, paths, ...(name === "excluded-data" ? { dir: "private_data" } : {}),
+			...(name === "shared-first" ? { designSystem: "packages/ui" } : {}) };
+		writeFileSync(manifest, JSON.stringify({ ...input, standards: [entry] }));
+		await install({ manifest, target: fresh });
+		const putFresh = (file: string, content: string) => {
+			mkdirSync(dirname(join(fresh, file)), { recursive: true });
+			writeFileSync(join(fresh, file), content);
+		};
+		putFresh("src/example.ts", "export const value = 1;\n");
+		putFresh("tests/example.test.ts", "export const example = true;\n");
+		ok(!existsSync(join(fresh, ".gitignore")), "mechanical installer must not edit ignore policy");
+		const invoke = (command: string[], code: number) => {
+			const result = Bun.spawnSync(command, { cwd: fresh, stdout: "pipe", stderr: "pipe",
+				env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
+			strictEqual(result.exitCode, code, `${command.join(" ")}\n${result.stdout}\n${result.stderr}`);
+			return result.stdout.toString();
+		};
+		const doctor = (code: number) => invoke([bun, "tools/doctor.ts"], code);
+		if (name === "excluded-data") {
+			const noGit = doctor(2);
+			ok(noGit.includes("doctor: 0 fail, 0 warn, 1 cannot-evaluate"), noGit);
+			ok(noGit.includes("CANNOT-EVALUATE excluded-data-ignore private_data:"), noGit);
+			invoke(["git", "init", "-b", "main"], 0);
+			ok(doctor(1).includes("FAIL excluded-data-ignore private_data:"), "unignored folder detected");
+			putFresh(".gitignore", "/private_data/\n");
+			invoke(["git", "check-ignore", "-q", "private_data/x"], 0);
+		}
+		strictEqual(doctor(0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+		const canonical = `docs/standards/${name}.md`;
+		const content = readFileSync(join(fresh, canonical), "utf8");
+		const index = readFileSync(join(fresh, "docs/index.md"), "utf8");
+		ok(index.includes("## Standards\n") && index.includes(`[${name}](standards/${name}.md)`));
+		for (const port of [".omp", ".claude"]) {
+			const rule = readFileSync(join(fresh, `${port}/rules/${name}.md`), "utf8");
+			for (const glob of paths) ok(rule.includes(glob), rule);
+			ok(rule.includes(`Canonical rule: \`${canonical}\``));
+			ok(!rule.includes("{{"));
+		}
+		ok(!content.includes("{{"));
+		for (const other of names.filter(other => other !== name)) {
+			for (const file of [`docs/standards/${other}.md`, `.omp/rules/${other}.md`, `.claude/rules/${other}.md`]) ok(!existsSync(join(fresh, file)), file);
+			ok(!index.includes(`standards/${other}.md`));
+		}
+		if (name === "excluded-data") ok(content.includes("`private_data/`"));
+		if (name === "shared-first") ok(content.includes("packages/ui"));
+		if (name === "testing") ok(content.endsWith("## Surfaces\n") && content.includes("rule://stack"));
+		const metadata = JSON.parse(readFileSync(join(fresh, ".omp/mosaic.json"), "utf8"));
+		deepStrictEqual(metadata.standards, [entry]);
+		putFresh(".omp/mosaic.json", JSON.stringify({ ...metadata, standards: [{ ...entry, paths: [...paths, "missing/**/*.ts"] }] }));
+		ok(doctor(1).includes("glob matches no repository file: missing/**/*.ts"));
+		putFresh(".omp/mosaic.json", JSON.stringify(metadata));
+		const rulePath = `.claude/rules/${name}.md`;
+		const rule = readFileSync(join(fresh, rulePath), "utf8");
+		putFresh(rulePath, rule.replace(`Canonical rule: \`${canonical}\``, "Canonical rule: elsewhere"));
+		ok(doctor(1).includes(`must point at ${canonical}`));
+		putFresh(rulePath, rule);
+		for (const file of [canonical, `.omp/rules/${name}.md`, rulePath]) {
+			const original = readFileSync(join(fresh, file), "utf8");
+			rmSync(join(fresh, file));
+			ok(doctor(1).includes(`FAIL standards ${file}:`), `missing ${file} detected as definite failure`);
+			putFresh(file, original);
+		}
+		strictEqual(doctor(0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+		console.log(`PASS standard ${name}: selected files/scopes/index, no residue, doctor 0/0/0; stale glob, missing files and wrong pointer rejected`);
+	}
+	for (const standards of [
+		null, {}, ["testing"], [{ name: "unknown", paths: ["src/**"] }],
+		[{ name: "testing", paths: [] }], [{ name: "testing", paths: "src/**" }],
+		[{ name: "testing", paths: [""] }], [{ name: "testing", paths: ["../escape/**"] }],
+		[{ name: "testing", paths: ["/absolute/**"] }], [{ name: "testing", paths: ["src/\n**"] }],
+		[{ name: "testing", paths: ["src/**"], dir: "data" }],
+		[{ name: "excluded-data", paths: ["src/**"], designSystem: "ui" }],
+		[{ name: "excluded-data", paths: ["src/**"], dir: "../data" }],
+		[{ name: "shared-first", paths: ["src/**"], designSystem: "" }],
+		[{ name: "testing", paths: ["src/**"] }, { name: "testing", paths: ["tests/**"] }],
+	]) {
+		writeFileSync(manifest, JSON.stringify({ ...input, standards }));
+		await rejects(install({ manifest, target: join(scratch, "invalid-standard") }), /standards/);
+		ok(!existsSync(join(scratch, "invalid-standard")), "invalid manifest rejected before writes");
+	}
+	console.log("PASS standards invalid manifests: list, names, duplicates, paths and standard-specific fields rejected before writes");
+	const combined = join(scratch, "standards-combined");
+	writeFileSync(manifest, JSON.stringify({ ...input, standards: names.map(name => ({ name, paths: ["src/**/*.ts", "tests/**/*.ts"] })) }));
+	const cli = Bun.spawnSync([bun, join(import.meta.dir, "../../kit/install.ts"), "--manifest", manifest, "--target", combined],
+		{ stdout: "pipe", stderr: "pipe" });
+	strictEqual(cli.exitCode, 0, `${cli.stdout}\n${cli.stderr}`);
+	for (const file of ["src/example.ts", "tests/example.test.ts"]) {
+		mkdirSync(dirname(join(combined, file)), { recursive: true });
+		writeFileSync(join(combined, file), "export const example = true;\n");
+	}
+	const combinedGit = Bun.spawnSync(["git", "init", "-b", "main"], { cwd: combined, stdout: "pipe", stderr: "pipe" });
+	strictEqual(combinedGit.exitCode, 0, combinedGit.stderr.toString());
+	writeFileSync(join(combined, ".gitignore"), "/excluded_data/\n");
+	const combinedDoctor = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: combined, stdout: "pipe", stderr: "pipe" });
+	strictEqual(combinedDoctor.exitCode, 0, `${combinedDoctor.stdout}\n${combinedDoctor.stderr}`);
+	strictEqual(combinedDoctor.stdout.toString(), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+	ok(readFileSync(join(combined, "docs/standards/excluded-data.md"), "utf8").includes("`excluded_data/`"));
+	ok(readFileSync(join(combined, "docs/standards/shared-first.md"), "utf8").includes("the project's design system or shared component library, if any"));
+	console.log("PASS standards CLI smoke: all four together, default data folder/generic design-system text, doctor 0/0/0");
+	writeFileSync(manifest, JSON.stringify(input));
+}
 function exerciseCloseOut(flow: string): void {
 	const repo = join(scratch, "close-out-history");
 	mkdirSync(repo);
@@ -83,6 +420,9 @@ try {
 	}));
 	await install({ manifest, target });
 	const input = JSON.parse(readFileSync(manifest, "utf8"));
+	await exerciseBraceScope(input);
+	await exerciseFinalReviewRegressions(input);
+	await exerciseStandards(input);
 	const markdown = new Map<string, Buffer>();
 	for await (const file of new Bun.Glob("**/*.md").scan({ cwd: target, dot: true, onlyFiles: true })) {
 		markdown.set(file, readFileSync(join(target, file)));

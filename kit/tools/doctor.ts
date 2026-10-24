@@ -3,6 +3,7 @@
 // Exit 0: all hard checks pass; 1: failed checks; 2: a check cannot evaluate.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import { realpathWithinRoot } from "./root-containment.ts";
 
 type Outcome = "FAIL" | "WARN" | "CANNOT-EVALUATE";
@@ -10,7 +11,7 @@ const counts = { FAIL: 0, WARN: 0, "CANNOT-EVALUATE": 0 };
 const reported = new Set<string>();
 const maintenanceChecks: Record<string, true> = {
 	budgets: true, "read-before-mutate": true, "mosaic-config": true, "guard-config": true,
-	"single-home": true, "port-parity": true, symlinks: true, "governed-guard": true, placeholders: true,
+	"single-home": true, "port-parity": true, symlinks: true, "governed-guard": true, placeholders: true, standards: true,
 };
 function finding(outcome: Outcome, check: string, file: string, detail: string): void {
 	if (maintenanceChecks[check]) detail = `/mosaic-kit: ${detail}`;
@@ -29,14 +30,16 @@ if (args.length !== 0 && (args.length !== 2 || args[0] !== "--root" || !args[1] 
 	finding("CANNOT-EVALUATE", "usage", ".", "usage: bun tools/doctor.ts [--root <dir>]");
 	finish();
 }
-const root = path.resolve(args[1] ?? process.cwd());
+let root = path.resolve(args[1] ?? process.cwd());
 try {
 	if (!fs.statSync(root).isDirectory()) throw new Error("not a directory");
+	root = fs.realpathSync(root);
 } catch (error) {
 	finding("CANNOT-EVALUATE", "root", root, String(error));
 	finish();
 }
 const texts = new Map<string, string>();
+const standardFiles = new Set<string>();
 function text(check: string, file: string): string | undefined {
 	const cached = texts.get(file);
 	if (cached !== undefined) return cached;
@@ -45,7 +48,9 @@ function text(check: string, file: string): string | undefined {
 		texts.set(file, content);
 		return content;
 	} catch (error) {
-		finding("CANNOT-EVALUATE", check, file, `cannot read: ${String(error)}`);
+		if (standardFiles.has(file) && (error as NodeJS.ErrnoException).code === "ENOENT") {
+			finding("FAIL", "standards", file, "installed standard file is missing");
+		} else finding("CANNOT-EVALUATE", check, file, `cannot read: ${String(error)}`);
 		return undefined;
 	}
 }
@@ -84,6 +89,9 @@ function lines(content: string): string[] {
 const configPath = ".omp/mosaic.json";
 let defaultBranch = "main";
 let trackingMode = "none";
+type Standard = { name: string; paths: string[]; dir?: string; designSystem?: string };
+let standards: Standard[] = [];
+let repositories: { name: string; path: string; remote: string }[] = [];
 if (fs.existsSync(path.join(root, configPath))) {
 	const content = text("mosaic-config", configPath);
 	if (content !== undefined) {
@@ -113,12 +121,48 @@ if (fs.existsSync(path.join(root, configPath))) {
 				if (landing.mode !== "pull-request") throw new Error("landing.closeOut is only valid in pull-request mode");
 				if (landing.closeOut !== "two-commit") throw new Error("landing.closeOut must be two-commit");
 			}
+			if (config.repositories !== undefined) {
+				if (!Array.isArray(config.repositories)) throw new Error("repositories must be an array");
+				for (const repo of config.repositories) {
+					if (!repo || ["name", "path", "remote"].some(field => typeof repo[field] !== "string" || !repo[field].trim()
+						|| /[\r\n\0]/.test(repo[field]))) throw new Error("repositories entries require single-line name, path, and remote");
+					if (path.isAbsolute(repo.path) || repo.path.includes("\\") || repo.path.split("/").includes("..")) {
+						throw new Error("repositories paths must stay within the installation root");
+					}
+				}
+				repositories = config.repositories;
+			}
+			if (config.standards !== undefined) {
+				if (!Array.isArray(config.standards)) throw new Error("standards must be an array");
+				const names = new Set<string>();
+				for (const standard of config.standards) {
+					if (!standard || !["excluded-data", "no-magic-strings", "shared-first", "testing"].includes(standard.name)
+						|| names.has(standard.name)) throw new Error("standards must have supported, unique names");
+					names.add(standard.name);
+					if (!Array.isArray(standard.paths) || !standard.paths.length || standard.paths.some((glob: unknown) =>
+						typeof glob !== "string" || !glob.trim() || /[\r\n\0\\()]/.test(glob) || glob.includes("\u007b\u007b")
+						|| path.isAbsolute(glob) || glob.split("/").some(part => part === "." || part === ".."))) {
+						throw new Error("standards paths must be nonempty repository-relative globs without parentheses");
+					}
+					if (standard.dir !== undefined && (standard.name !== "excluded-data" || typeof standard.dir !== "string"
+						|| !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(standard.dir))) throw new Error("dir is only valid as an excluded-data repository-relative directory");
+					if (standard.designSystem !== undefined && (standard.name !== "shared-first" || typeof standard.designSystem !== "string"
+						|| !standard.designSystem.trim() || /[\r\n\0]/.test(standard.designSystem) || standard.designSystem.includes("\u007b\u007b"))) {
+						throw new Error("designSystem is only valid as a shared-first single-line string");
+					}
+				}
+				standards = config.standards;
+			}
 			defaultBranch = config.defaultBranch;
 			trackingMode = tracking.mode;
 		} catch (error) {
 			finding("FAIL", "mosaic-config", configPath, String(error));
 		}
 	}
+}
+for (const standard of standards) {
+	standardFiles.add(`docs/standards/${standard.name}.md`);
+	for (const port of [".omp", ".claude"]) standardFiles.add(`${port}/rules/${standard.name}.md`);
 }
 const processNames = [
 	"mosaic-core", "map", "plan-triage", "git-flow", "dispatch", "review-loop", "verification",
@@ -148,6 +192,9 @@ const harnessFiles = [
 	".claude/hooks/guard-main.sh", ".claude/hooks/lint-ledgers.sh", ".claude/hooks/records-guard.sh",
 ];
 if (fs.existsSync(path.join(root, ".omp/mosaic.json"))) harnessFiles.push(".omp/mosaic.json");
+for (const standard of standards) {
+	harnessFiles.push(`.omp/rules/${standard.name}.md`, `.claude/rules/${standard.name}.md`);
+}
 
 // Budgets count physical body lines, including blanks, excluding the final newline.
 const budgets = new Map<string, number>([["AGENTS.md", 30], ["CLAUDE.md", 30], [".claude/rules/mosaic-core.md", 30]]);
@@ -160,6 +207,13 @@ for (const port of [".omp", ".claude"] as const) {
 	for (const file of agentFiles(port)) budgets.set(file, 60);
 }
 budgets.set("docs/kit/maintenance.md", 120);
+for (const standard of standards) {
+	budgets.set(`docs/standards/${standard.name}.md`, 80);
+	for (const port of [".omp", ".claude"]) {
+		const file = `${port}/rules/${standard.name}.md`;
+		if (fs.existsSync(path.join(root, file))) budgets.set(file, 80);
+	}
+}
 for (const [file, max] of budgets) {
 	const content = text("budgets", file);
 	if (content === undefined) continue;
@@ -378,6 +432,131 @@ if (guard !== undefined && guardTwin !== undefined && guardHook !== undefined) {
 	compareGlobs(expected, twinGlobs, ".claude/rules/records-guard.md");
 	compareGlobs(expected, hookGlobs, ".claude/hooks/records-guard.sh");
 }
+
+// Canonicalize existing ancestors while retaining the suffix of a not-yet-created data folder.
+function physicalPath(destination: string): string {
+	let ancestor = destination;
+	const suffix: string[] = [];
+	while (!fs.existsSync(ancestor)) {
+		suffix.unshift(path.basename(ancestor));
+		ancestor = path.dirname(ancestor);
+	}
+	return path.join(fs.realpathSync(ancestor), ...suffix);
+}
+// Resolve nested member repositories from the nearest existing directory, not the link repo's ignore policy.
+const repositoryRoots = new Map<string, string | undefined>();
+function repositoryFor(destination: string): string | undefined {
+	let ancestor = destination;
+	while (!fs.existsSync(ancestor) || !fs.statSync(ancestor).isDirectory()) {
+		const parent = path.dirname(ancestor);
+		if (parent === ancestor) return undefined;
+		ancestor = parent;
+	}
+	if (!repositoryRoots.has(ancestor)) {
+		const git = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: ancestor, encoding: "utf8" });
+		repositoryRoots.set(ancestor, git.status === 0 ? fs.realpathSync(git.stdout.trim()) : undefined);
+	}
+	return repositoryRoots.get(ancestor);
+}
+const repositoryFiles = new Map<string, string[]>();
+function inventory(repo: string, prefix: string): string[] {
+	const cached = repositoryFiles.get(prefix);
+	if (cached) return cached;
+	const git = spawnSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { cwd: repo, encoding: "utf8" });
+	if (git.status !== 0) throw new Error(`git ls-files failed: ${String(git.stderr ?? "").trim() || String(git.error)}`);
+	const result = git.stdout.split("\0").filter(Boolean).map(file => path.join(prefix, file))
+		.filter(file => file !== ".." && !file.startsWith(`..${path.sep}`) && !path.isAbsolute(file)
+			&& fs.existsSync(path.join(root, file)) && !fs.statSync(path.join(root, file)).isDirectory());
+	repositoryFiles.set(prefix, result);
+	return result;
+}
+const rootRepository = standards.length ? repositoryFor(root) : undefined;
+const inventoryRepositories = new Map<string, string>(rootRepository ? [["", root]] : []);
+const unavailableRepositories = new Set<string>();
+if (standards.length) for (const member of repositories.filter(repo => repo.path !== ".")) {
+	const destination = physicalPath(path.resolve(root, member.path));
+	const repo = repositoryFor(destination);
+	if (repo !== destination) {
+		finding("CANNOT-EVALUATE", "standards", member.path, `cannot evaluate member ${member.name}: no git repository at configured path`);
+		unavailableRepositories.add(member.path);
+	} else inventoryRepositories.set(member.path, repo);
+}
+for (const [prefix, repo] of inventoryRepositories) {
+	try { inventory(repo, prefix); }
+	catch (error) {
+		unavailableRepositories.add(prefix || ".");
+		finding("CANNOT-EVALUATE", "standards", prefix || ".", `cannot inventory repository: ${String(error)}`);
+	}
+}
+
+for (const standard of standards) {
+	const canonical = `docs/standards/${standard.name}.md`;
+	for (const file of [canonical, `.omp/rules/${standard.name}.md`, `.claude/rules/${standard.name}.md`]) {
+		if (!fs.existsSync(path.join(root, file))) {
+			finding("FAIL", "standards", file, "installed standard file is missing");
+			continue;
+		}
+		const content = text("standards", file);
+		if (content === undefined || file === canonical) continue;
+		if (!body(content).includes(`Canonical rule: \`${canonical}\``)) finding("FAIL", "standards", file, `must point at ${canonical}`);
+		try {
+			const header = frontmatter(content);
+			let actual: string[];
+			if (file.startsWith(".omp/")) {
+				const scope = /^scope:[ \t]*(.*)$/m.exec(header)?.[1];
+				if (scope === undefined) throw new Error("scope field is required");
+				const parsed: unknown = JSON.parse(scope);
+				if (!Array.isArray(parsed) || parsed.some(token => typeof token !== "string")) throw new Error("scope must be a string sequence");
+				actual = parsed;
+			} else {
+				const paths = /^paths:[ \t]*(\[[^\n]*\]|(?:\n[ \t]+-[^\n]*)*)[ \t]*$/m.exec(header)?.[1];
+				if (paths === undefined) throw new Error("paths field is required");
+				actual = paths.startsWith("[") ? JSON.parse(paths)
+					: paths.split("\n").filter(line => line.trim()).map(line => JSON.parse(line.replace(/^[ \t]+-[ \t]*/, "")));
+			}
+			const expected = file.startsWith(".omp/") ? standard.paths.flatMap(glob => [`tool:edit(${glob})`, `tool:write(${glob})`]) : standard.paths;
+			if (JSON.stringify(actual) !== JSON.stringify(expected)) finding("FAIL", "standards", file, "scope differs from installed standards metadata");
+		} catch {
+			finding("FAIL", "standards", file, "cannot parse rendered scope");
+		}
+	}
+	comparePair(`.omp/rules/${standard.name}.md`, `.claude/rules/${standard.name}.md`);
+	for (const glob of standard.paths) {
+		try {
+			const pattern = new Bun.Glob(glob);
+			let matched: boolean;
+			if (rootRepository) {
+				matched = false;
+				for (const prefix of inventoryRepositories.keys()) {
+					if (repositoryFiles.get(prefix)?.some(file => pattern.match(file))) { matched = true; break; }
+				}
+			} else {
+				matched = [...pattern.scanSync({ cwd: root, dot: true, onlyFiles: true, followSymlinks: false })]
+					.some(file => !file.split("/").some(part => part === ".git" || part === "node_modules"));
+			}
+			if (!matched) {
+				if (unavailableRepositories.size) finding("CANNOT-EVALUATE", "standards", canonical,
+					`cannot evaluate glob ${glob}: unavailable repositories: ${[...unavailableRepositories].join(", ")}`);
+				else finding("FAIL", "standards", canonical, `glob matches no repository file: ${glob}`);
+			}
+		} catch (error) {
+			finding("CANNOT-EVALUATE", "standards", canonical, `cannot evaluate glob ${glob}: ${String(error)}`);
+		}
+	}
+	if (standard.name === "excluded-data") {
+		const dir = standard.dir ?? "excluded_data";
+		const destination = physicalPath(path.resolve(root, dir));
+		const repo = repositoryFor(destination);
+		if (!repo) finding("CANNOT-EVALUATE", "excluded-data-ignore", dir, "cannot evaluate ignore policy without a git repository");
+		else {
+			const folder = `${path.relative(repo, destination)}/`;
+			const ignored = spawnSync("git", ["check-ignore", "-q", "--", folder], { cwd: repo, encoding: "utf8" });
+			if (ignored.status === 1) finding("FAIL", "excluded-data-ignore", dir, "folder is not ignored; add its one folder ignore line");
+			else if (ignored.status !== 0) finding("CANNOT-EVALUATE", "excluded-data-ignore", dir,
+				`git check-ignore failed: ${String(ignored.stderr ?? "").trim() || String(ignored.error ?? ignored.signal)}`);
+		}
+	}
+}
 // Placeholder ownership is the installed harness's text surface, not the project tree.
 // Exclude project sources (JSX), workflows, Makefiles, fonts/images, and nested checkouts.
 const placeholderFiles = new Set([
@@ -385,6 +564,7 @@ const placeholderFiles = new Set([
 	"docs/architecture/README.md", "docs/architecture/pitfalls.md", "docs/architecture/open-questions.md", "docs/kit/maintenance.md",
 	"docs/plans/README.md", "docs/plans/TEMPLATE.md", "docs/product/README.md",
 	...harnessFiles, ...processFiles,
+	...standards.map(standard => `docs/standards/${standard.name}.md`),
 	...(trackingMode === "local" ? files("placeholders", "docs/tracker", false).filter(file => file.endsWith(".json")) : []),
 	...files("placeholders", "tools").filter(file => file.endsWith(".ts")),
 ]);

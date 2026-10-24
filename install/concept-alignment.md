@@ -16,6 +16,7 @@ Assign stable IDs `A1`, `A2`, …; never reuse an ID when a ruling changes. One 
 A doc-family row cites its complete source-file inventory/ledger rows, including component docs and non-Markdown assets; enumerate roles, skills, hooks, and registries individually. Add `new` rows for genuinely absent kit concepts with source `none`.
 Split mixed concepts across rows where their directions/actions differ; cite shared source paths and cross-link the rows so no original content is lost.
 Always include a **tracker** row, including when no tracker exists: source evidence or `none` ↔ the rendered `docs/process/tracker.md` and runtime `tracking` metadata. Cite H-tracking, server/team/queue scope, selected/omitted files, local-data preservation/archive destinations, and read-only verification. `none` is a recorded mode, not permission to skip alignment.
+For each offered standard (excluded-data, no-magic-strings, shared-first, testing), record the human's opt-in choice, confirmed source/test globs and any directory/design-system value. Map existing equivalent authority as a merge, not a duplicate; name the canonical home, both runtime scopes and index row. Excluded-data placement includes the one folder ignore line and ignore-check evidence; testing's Surfaces remains project-owned.
 
 | ID | Existing concept / path or name / inventory evidence | Kit concept / home | alignment | Adapt-kit option | Restructure-target option | direction + rationale | resolution | owner | status + evidence |
 |---|---|---|---|---|---|---|---|---|---|
