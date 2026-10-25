@@ -92,7 +92,11 @@ function evaluate(repoName: string, planArgument?: string): Record<string, strin
   }
   function sameHeadRepository(pr: Record<string, unknown>): boolean {
     if (pr.isCrossRepository !== false || !record(pr.headRepository) || !record(pr.headRepositoryOwner)) return false;
-    const name = pr.headRepository.nameWithOwner, owner = pr.headRepositoryOwner.login;
+    const owner = pr.headRepositoryOwner.login, repo = pr.headRepository;
+    // Some gh releases (2.83.2 among them) return `nameWithOwner: ""` from `pr list`; the owner login and the
+    // repository name then identify the head.
+    const name = typeof repo.nameWithOwner === "string" && repo.nameWithOwner !== "" ? repo.nameWithOwner
+      : typeof owner === "string" && typeof repo.name === "string" ? `${owner}/${repo.name}` : undefined;
     if (typeof name !== "string" || typeof owner !== "string" || !/^[^/]+\/[^/]+$/.test(name)) return false;
     return name.split("/")[0]!.toLowerCase() === owner.toLowerCase()
       && configuredIdentity.slice(configuredIdentity.indexOf("/") + 1) === name.toLowerCase()
