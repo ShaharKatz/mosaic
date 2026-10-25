@@ -303,6 +303,18 @@ try {
       r.stop(lookup === "own" ? 4 : 7);
     });
   }
+  // gh 2.83.2 returns `nameWithOwner: ""` from `pr list`; the owner login and repository name still identify the head.
+  for (const lookup of ["own", "parent"]) for (const identity of ["same", "fork", "owner"]) {
+    regression(`S3_head_identity_empty_name_with_owner[${lookup},${identity}]`, r => {
+      r.setup(); r.own(PARENT);
+      const data = lookup === "own" ? (r.responses["pr list"]!.value as Record<string, unknown>[])[0]! : r.responses["pr view"]!.value as Record<string, unknown>;
+      data.headRepository = { name: basename(r.root), nameWithOwner: "" };
+      if (identity === "fork") { data.isCrossRepository = true; data.headRepositoryOwner = { login: "fork" }; }
+      else if (identity === "owner") data.headRepositoryOwner = { login: "fork" };
+      if (identity === "same") { const v = r.resolve(); eq(v.parent, "open"); eq(v.action, c.NONE); }
+      else r.stop(lookup === "own" ? 4 : 7);
+    });
+  }
   for (const name of ["true", "123", "null", "branch'quote", 'branch"quote']) regression(`S5_yaml_default_branch[${name}]`, r => {
     const manifest = join(r.root, "manifest.json"), rendered = join(r.root, "installed");
     writeFileSync(manifest, JSON.stringify({ project: { name: "Quoted", summary: "Quoted is a fixture." }, topology: "monorepo",
