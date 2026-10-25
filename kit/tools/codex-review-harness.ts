@@ -431,7 +431,7 @@ if (import.meta.main) {
         if (!values.spec || !values.out) throw new Error("mutate requires --spec and --out");
         const spec = JSON.parse(fs.readFileSync(values.spec, "utf8"));
         process.exitCode = await mutate(root, entries, Array.isArray(spec) ? spec : spec.proposed_mutations, positionals, values.out);
-      } else throw new Error("usage: codex-review-harness.ts gather|provision|test|mutate|snapshot-state|assert-isolation|probe-sandbox");
+      } else throw new Error("usage: codex-review-harness.ts gather|provision|test|run|mutate|snapshot-state|assert-isolation|probe-sandbox");
     }
   } catch (error) { console.error(String(error)); process.exitCode = 1; }
 }
