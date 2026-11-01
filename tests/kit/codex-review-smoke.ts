@@ -140,6 +140,9 @@ try {
   deepStrictEqual([...groups(clone, [rootEntry, rooted], ["component with spaces/test.py", "component with spaces"]).values()], [["component with spaces"]]);
   deepStrictEqual([...groups(clone, [rootEntry, rooted], ["component with spaces", "component with spaces/test.py"]).values()], [["component with spaces"]]);
   deepStrictEqual([...groups(clone, [rootEntry], ["."]).values()], [[]], "root selection still runs the whole root command");
+  deepStrictEqual([...groups(clone, [entry("pytest", "uv run --with pytest pytest", ".", "tests")], ["."]).values()], [[]], "a root entry with a subdirectory cwd keeps its whole command");
+  deepStrictEqual([...groups(clone, [rootEntry, entry("pytest", "uv run --with pytest pytest", "pkg", "pkg/tests")], ["pkg"]).values()], [[]], "a cwd inside the component keeps its whole command");
+  for (const format of ["jest", "vitest"] as const) deepStrictEqual([...groups(clone, [rootEntry, entry(format, "npx runner", "web", ".")], ["web"]).values()], [[]], `${format} whole-component selection is not narrowed`);
   const dashed = entry("pytest", "uv run --with pytest pytest", "-dash", ".");
   deepStrictEqual([...groups(clone, [rootEntry, dashed], ["-dash"]).values()], [["./-dash"]], "option-like component scope stays literal");
   // Directory selection relies on pytest discovery, so this component's test file follows the test_*.py pattern.

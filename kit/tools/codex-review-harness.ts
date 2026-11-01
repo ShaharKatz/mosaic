@@ -76,8 +76,13 @@ export function groups(root: string, entries: TestEntry[], paths: string[]): Map
     const selected = result.get(entry) ?? [];
     result.set(entry, selected);
     if (file === entry.path && !selection.includes("::")) {
-      // A runner whose cwd is outside its component still runs only that component.
-      const scope = p.relative(entry.testRunner.cwd, entry.path);
+      // A pytest component whose runner runs from outside it (e.g. a workspace member run from the
+      // root) still runs only that component. The root entry, a cwd inside the component, and other
+      // formats keep the declared whole command (Jest's --runTestsByPath and Vitest's substring
+      // filters cannot take a directory scope safely).
+      const outside = p.relative(entry.path, entry.testRunner.cwd);
+      const scope = entry.path !== "." && entry.testRunner.format === "pytest" && (outside === ".." || outside.startsWith("../"))
+        ? p.relative(entry.testRunner.cwd, entry.path) : "";
       selected.length = 0; whole.add(entry);
       if (scope) selected.push(/^[-@]/.test(scope) ? `./${scope}` : scope);
     }
