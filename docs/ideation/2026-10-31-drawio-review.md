@@ -140,7 +140,7 @@ Layers have no Mermaid equivalent; they map onto classes. Verified on GitHub (se
 - Element metadata (`component`, `source`, `decision`, `intent`) has no slot in Mermaid; it would live in `%% @<id> key=value` comment lines, which renderers ignore, or in a separate file.
 - Mermaid places every element itself; hand-arranged lanes and positions from the draw.io contract cannot be kept.
 
-Built on 2026-11-01 (uncommitted): metadata went into Mermaid data blocks (`id@{ … }`) instead of `%%` comments, and the PR review comment, converter and upgrade path exist. Status, evidence and open decisions: [the plan's Status section](2026-10-31-mermaid-migration-plan.md#status-2026-11-01).
+Built and landed on 2026-11-01 ([ShaharKatz/mosaic#3](https://github.com/ShaharKatz/mosaic/pull/3)): metadata went into Mermaid data blocks (`id@{ … }`) instead of `%%` comments, and the PR review comment, converter and upgrade path exist. Status, evidence and rollout: [the plan's Status section](2026-10-31-mermaid-migration-plan.md#status-2026-11-01).
 
 ## Operating notes (Orca computer use)
 
@@ -156,3 +156,4 @@ Built on 2026-11-01 (uncommitted): metadata went into Mermaid data blocks (`id@{
 - Orca: `shaharkatz.drawio-viewer` installed and enabled. The install is a copy under `~/Library/Application Support/orca/plugins/`, so reinstall after changing the plugin. Project `orca-drawio-viewer` added with `orca repo set --external-worktree-visibility show`; without it, Orca 1.4.245 showed no workspace for the newly added repo.
 - Orca setting: Open In Apps entry `draw.io` → `open -a /tmp/drawio-cli/draw.io.app`; breaks once `/tmp/drawio-cli` is gone.
 - macOS: "Orca Computer Use" keeps Accessibility and Screen Recording until revoked in System Settings → Privacy & Security.
+- GitHub: [drawio-pr-demo#2](https://github.com/ShaharKatz/drawio-pr-demo/pull/2) (the Mermaid review-comment demo, with its `diagram review` workflow) and branches `mermaid-base` and `mermaid-head`. Its source clone is `/tmp/rv-dryrun`; the upgrade dry-run clones are `/tmp/airgap-analyst-dryrun` and `/tmp/airgap-analyst-ex5-dryrun`.

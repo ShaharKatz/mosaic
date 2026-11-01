@@ -11,7 +11,7 @@ Background and evidence: [Viewing and reviewing draw.io diagrams](2026-10-31-dra
 
 ## Status (2026-11-01)
 
-All three phases are built in this checkout and verified; nothing is committed (branch `ShaharKatz/docs-drawio-local-and`, on `e2b4125`).
+All three phases are built, verified and landed: [ShaharKatz/mosaic#3](https://github.com/ShaharKatz/mosaic/pull/3), rebase-merged on 2026-11-01 as `9fdbcb9` (branch `ShaharKatz/docs-drawio-local-and` kept).
 
 | Phase | Built | Evidence |
 |---|---|---|
@@ -35,17 +35,12 @@ Found during verification and fixed beyond the spec:
 - **GitHub quirk.** In the demo repository, `pull_request` runs started only after its first push-triggered run.
 - **Independent review (reviewer agent, second attempt after a rate limit).** Six findings, all fixed with regression cases: ERD drawings were focused per side, so an additions-only change showed the whole schema as Before (now one focus per file from both sides); the install skill and migration map sent fresh installs' draw.io files to the upgrade-only converter (now: preserve them as project documents or redraw); the converter did not escape `#` in edge and group labels; `--plans` missed column-0 `areas:` items and CRLF frontmatter; the manual comment lookup was not paginated; `<br />` and `<BR>` were not read as line breaks.
 
-Owner decisions:
+Rollout (the owner approved every item on 2026-11-01):
 
-1. Commit and land this change (suggested subject `kit: replace draw.io diagrams with Mermaid`).
-2. Then upgrade airgap-analyst and airgap-analyst-ex5 through `/mosaic-kit`, approving per project:
-   - remove `drawio` from `.mcp.json` and from `enabledMcpjsonServers` in `.claude/settings.json`;
-   - reword the `docs/index.md` harness row for `.mcp.json` to name only the `linear` tracker server;
-   - in `kit-adaptations.md`, the `.claude/settings.json` row says the servers are now only `linear`, and its reason marks the A50 `drawio` mount as superseded by Mermaid diagrams.
-
-   Doctor and checkup pass with and without these edits.
-3. Linear: posting the comment there stays optional; its Mermaid version (edge ids) is unverified.
-4. Demo artifacts: drawio-pr-demo PR #2 with branches `mermaid-base`/`mermaid-head`, plus the earlier draw.io leftovers listed in the review doc.
+1. **mosaic:** landed as above.
+2. **airgap-analyst:** upgraded through `/mosaic-kit` in [ShaharKatz/airgap-analyst#6](https://github.com/ShaharKatz/airgap-analyst/pull/6) (Linear SHA-10), rebase-merged as `305ca71` (branch `kit/upgrade-9fdbcb9` kept). It places the 17 changed kit files, sets `diagrams.mode: "mermaid"`, and makes the owner-approved project edits: `drawio` leaves `.mcp.json` and `enabledMcpjsonServers`, the `docs/index.md` row names only `linear`, and `kit-adaptations.md` updates its source and manifest lines and the `.claude/settings.json` row. Final review (the project's `gpt-reviewer`): APPROVE on `850b98b` with one procedural note, that the contract README replacement was not on the approved list (the installed README equalled the old starter). CI passed on the head and on `main`.
+3. **airgap-analyst-ex5:** a second worktree of the same repository, on the analysis branch `example-5-new-vs-returning-dashboard`. `main` was merged into it locally (`5435495`, not pushed); only the 20 upgrade paths changed. It was not rebased because Tableau Desktop had the branch's workbook open.
+4. **Linear** posting of the review comment stays optional (its Mermaid version is unverified). [drawio-pr-demo#2](https://github.com/ShaharKatz/drawio-pr-demo/pull/2) and its branches are kept.
 
 ## Verified facts this plan relies on
 
