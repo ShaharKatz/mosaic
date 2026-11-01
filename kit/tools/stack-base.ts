@@ -165,7 +165,11 @@ function evaluate(repoName: string, planArgument?: string): Record<string, strin
         const legalDirectory = join(home, c.PLAN_DIRECTORY, ...(archived ? [c.ARCHIVED_DIRECTORY] : []));
         if (dirname(planPath) !== legalDirectory) throw new Error("plan is not in its declared home");
         if (String(data.plan).padStart(4, "0") !== match[1] || data.branch !== branch) throw new Error("plan number or branch does not match");
-        if ("base" in data || "base-pr" in data) throw new Error("use bases, not scalar declarations");
+        if ("base" in data || "base-pr" in data) {
+          const base = typeof data.base === "string" && data.base ? data.base : defaultBranch;
+          const pr = data["base-pr"] === "" || data["base-pr"] == null ? null : data["base-pr"];
+          throw new Error(branched.size > 1 ? c.ambiguousScalarBases(branched) : c.scalarBaseReplacement(targets[0]!, base, pr));
+        }
         if ("bases" in data) {
           if (!record(data.bases) || Object.keys(data.bases).length !== branched.size || Object.keys(data.bases).some(name => !branched.has(name))) throw new Error("bases must cover exactly the branched repositories");
           for (const name of branched) {
