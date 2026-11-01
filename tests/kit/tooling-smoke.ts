@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
+import { deepStrictEqual, ok, rejects, strictEqual, throws } from "node:assert";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -877,6 +877,7 @@ function exerciseReplay(rule: string): void {
 		return invoke(["bash", "-c", command]);
 	};
 	const isCode = (file: string) => !file.startsWith("docs/") && !file.endsWith(".md");
+	type ReplayResult = { kind: string; conflicts: string[]; delta: string[] };
 	const replay = (recorded: string, reviewed: string, current: string) => {
 		const values: Record<string, string> = { "<recorded base sha>": recorded, "<last reviewed sha>": reviewed, "<base sha>": current };
 		for (const [prefix, key] of [["git merge-base <recorded", "<old base>"], ["git merge-base <base", "<new base>"]]) {
@@ -913,32 +914,53 @@ function exerciseReplay(rule: string): void {
 	git("init", "-b", "main"); git("config", "commit.gpgsign", "false");
 	commit("code.txt", "base\n", "base");
 	const base = commit("docs/guide.md", "base\n", "base docs");
+	const probeSupportsReplay = (result: { exitCode: number; stderr: string }) => {
+		if (result.exitCode === 0) return true;
+		if (result.exitCode === 129 && /^error: unknown option [`'](?:--)?merge-base(?:=|['`])/m.test(result.stderr)
+			&& /^usage: git merge-tree /m.test(result.stderr)) return false;
+		throw new Error(`merge-tree probe exited ${result.exitCode}\n${result.stderr}`);
+	};
+	strictEqual(probeSupportsReplay({ exitCode: 129, stderr: "error: unknown option `merge-base=HEAD'\nusage: git merge-tree [--write-tree] [<options>] <branch1> <branch2>\n" }), false);
+	throws(() => probeSupportsReplay({ exitCode: 128, stderr: "fatal: unable to read tree" }),
+		/merge-tree probe exited 128\nfatal: unable to read tree/);
+	throws(() => probeSupportsReplay({ exitCode: 129, stderr: "usage: git merge-tree [--write-tree]\n" }), /merge-tree probe exited 129/);
+	throws(() => probeSupportsReplay({ exitCode: 129, stderr: "error: unknown option `unrelated'\nusage: git merge-tree [--write-tree]\n" }), /merge-tree probe exited 129/);
+	console.log("PASS executable replay probe: unknown merge-base option selects fail-closed; fatal/128 and unrelated usage errors fail the smoke");
+	const probe = invoke(["git", "merge-tree", "--write-tree", `--merge-base=${base}`, base, base]);
+	const supportsReplay = probeSupportsReplay({ exitCode: probe.exitCode, stderr: probe.stderr.toString() });
+	const checkReplay = (recorded: string, reviewed: string, current: string, check: (result: ReplayResult) => void) => {
+		const result = replay(recorded, reviewed, current);
+		if (supportsReplay) check(result);
+		else deepStrictEqual(result, { kind: "full", conflicts: [], delta: [] }, "unsupported merge-tree fails closed with no tree or delta");
+	};
 	git("checkout", "-b", "reviewed");
 	commit("code.txt", "reviewed\n", "reviewed code");
 	const reviewed = commit("docs/guide.md", "reviewed\n", "reviewed docs");
-	strictEqual(replay(base, reviewed, base).kind, "none", "unchanged head");
+	checkReplay(base, reviewed, base, result => strictEqual(result.kind, "none", "unchanged head"));
 	git("checkout", "main");
 	const upstream = commit("upstream.txt", "inherited\n", "new base");
 	git("checkout", "reviewed"); git("rebase", upstream);
-	strictEqual(replay(base, reviewed, upstream).kind, "none", "unchanged rebase excludes inherited code");
+	checkReplay(base, reviewed, upstream, result => strictEqual(result.kind, "none", "unchanged rebase excludes inherited code"));
 	git("reset", "--soft", upstream); git("commit", "-m", "squash");
-	strictEqual(replay(base, reviewed, upstream).kind, "none", "unchanged squash");
+	checkReplay(base, reviewed, upstream, result => strictEqual(result.kind, "none", "unchanged squash"));
 	commit("code.txt", "changed\n", "own change");
-	deepStrictEqual(replay(base, reviewed, upstream).delta, ["code.txt"], "own code detected");
+	checkReplay(base, reviewed, upstream, result => deepStrictEqual(result.delta, ["code.txt"], "own code detected"));
 	git("checkout", "-b", "docs-base", upstream);
 	const docsBase = commit("docs/guide.md", "upstream docs\n", "docs conflict");
 	git("checkout", "-b", "docs-head", docsBase);
 	commit("code.txt", "reviewed\n", "replayed code");
 	commit("docs/guide.md", "resolved docs\n", "resolved docs");
-	strictEqual(replay(base, reviewed, docsBase).kind, "none", "docs-only conflict needs no round");
+	checkReplay(base, reviewed, docsBase, result => strictEqual(result.kind, "none", "docs-only conflict needs no round"));
 	git("checkout", "-b", "code-base", upstream);
 	const codeBase = commit("code.txt", "upstream code\n", "code conflict");
 	git("checkout", "-b", "code-head", codeBase);
 	commit("code.txt", "resolved code\n", "resolution");
 	commit("docs/guide.md", "reviewed\n", "reviewed docs");
-	deepStrictEqual(replay(base, reviewed, codeBase).conflicts, ["code.txt"], "code conflict requires delta with both patches");
-	strictEqual(replay("missing-recorded-base", reviewed, codeBase).kind, "full", "missing recorded base forces full round");
-	console.log("PASS executable replay: unchanged head/rebase/squash empty; own code detected; docs/code conflicts classified; missing base forces full round");
+	checkReplay(base, reviewed, codeBase, result => deepStrictEqual(result.conflicts, ["code.txt"], "code conflict requires delta with both patches"));
+	checkReplay("missing-recorded-base", reviewed, codeBase, result => strictEqual(result.kind, "full", "missing recorded base forces full round"));
+	console.log(supportsReplay
+		? "PASS executable replay (merge-tree supported): unchanged head/rebase/squash empty; own code detected; docs/code conflicts classified; missing base forces full round"
+		: "PASS executable replay (merge-tree unsupported): every case fails closed to full with no tree or delta");
 }
 async function exerciseStackAcceptance(input: Record<string, unknown>): Promise<void> {
 	for (const topology of ["monorepo", "multi-repo"]) for (const mode of ["direct", "pull-request"]) {
