@@ -11,7 +11,7 @@ export const DECISION_ARCHIVE = "docs/architecture/decisions-archive.md";
 export const DECISION_REUSED = "decision number listed twice across the decision maps";
 // Frozen records excluded from source-format migration rewrites.
 export const MIGRATION_FROZEN_PATHS = {
-  directory: "archived", plansDirectory: "evidence", repoDirectory: "docs/architecture/source",
+  directory: "archived", plansSegment: "plans", plansDirectory: "evidence", repoDirectory: "docs/architecture/source",
   files: ["gaps-archive.md", "decisions-archive.md"],
 } as const;
 export const LAYERS = ["as-built", "intended", "retiring"] as const;

@@ -2,7 +2,7 @@
 // Source-side converter smoke: old draw.io fixtures (builders from e2b4125 tests/kit/diagram-smoke.ts) in a
 // sandbox installed with the current kit, converted by install/drawio-to-mermaid.ts and checked by the new tools.
 import { deepStrictEqual as eq, ok, strictEqual as equal } from "node:assert";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { deflateRawSync } from "node:zlib";
@@ -195,6 +195,50 @@ try {
     ok(out.includes(`rewrote doc references: ${doc}`), out);
     for (const file of frozen) equal(read(file), `Frozen: \`${fixture}\`.`);
     equal(read("docs/archived/fixture.drawio"), serialize(d));
+  });
+  test("evidence_frozen_without_plans_option", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    const text = `Evidence: \`${fixture}\`.`;
+    put("docs/plans/evidence/0001/x.md", text);
+    run(["--root", root, "--docs", "docs"], 0);
+    equal(read("docs/plans/evidence/0001/x.md"), text);
+  });
+  test("external_docs_alias_rejected_without_writes", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    const external = join(scratch, "outside-docs"), text = `Outside: \`${fixture}\`.`;
+    put(join(external, "overview.md"), text);
+    symlinkSync(external, "docs-alias");
+    run(["--root", root, "--docs", "docs-alias"], 1);
+    equal(readFileSync(join(external, "overview.md"), "utf8"), text);
+    ok(exists(fixture) && !exists(output));
+  });
+  test("internal_docs_alias_keeps_frozen_source", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    const text = `Frozen: \`${fixture}\`.`;
+    put("docs/architecture/source/overview.md", text);
+    symlinkSync("docs/architecture/source", "history-alias");
+    run(["--root", root, "--docs", "history-alias"], 0);
+    equal(read("docs/architecture/source/overview.md"), text);
+  });
+  test("root_relative_destination", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    put("docs/architecture/overview.md", `[system](/${fixture}?q=1#api "System title")`);
+    run(["--root", root, "--docs", "docs"], 0);
+    equal(read("docs/architecture/overview.md"), `[system](/${output}?q=1#api "System title")`);
+  });
+  test("encoded_destination_suffix", () => {
+    const erd = diagram(); erd.attrs.generator = "mosaic-prisma-erd";
+    save(erd, `${root}/schema.erd.drawio`);
+    put("docs/architecture/overview.md", '[encoded](diagrams/schema.erd%2Edrawio?q=1#model "Schema title")');
+    run(["--root", root, "--docs", "docs"], 0);
+    equal(read("docs/architecture/overview.md"), '[encoded](diagrams/schema.erd%2Emmd?q=1#model "Schema title")');
+  });
+  test("angle_destination_with_spaces", () => {
+    const erd = diagram(); erd.attrs.generator = "mosaic-prisma-erd";
+    save(erd, `${root}/schema space.erd.drawio`);
+    put("docs/architecture/overview.md", '[spaced](<diagrams/schema space.erd.drawio?q=1#model> "Schema title")');
+    run(["--root", root, "--docs", "docs"], 0);
+    equal(read("docs/architecture/overview.md"), '[spaced](<diagrams/schema space.erd.mmd?q=1#model> "Schema title")');
   });
   test("docs_unchanged_without_option", () => {
     const d = diagram(); element(d, "api"); save(d);

@@ -5,13 +5,14 @@
 // Generated ERDs always live inside the diagrams root, so --root covers them.
 // Exit 0: converted and clean; 1: nothing written (usage, parse, misread-id or equivalence-gate failure);
 // 2: converted, but diagram-check findings remain.
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { inflateRawSync } from "node:zlib";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, relative, resolve } from "node:path";
 import { Diagram, decisions, encodeLabel, serializeData, settings, validate } from "../kit/tools/diagram-check.ts";
 import { project } from "../kit/tools/diagram-delta.ts";
 import * as c from "../kit/tools/constants/diagrams.ts";
 import { GENERATED } from "../kit/tools/constants/erd.ts";
+import { realpathWithinRoot } from "../kit/tools/root-containment.ts";
 
 // ---- Pre-migration reader, copied from e2b4125 kit/tools/diagram-check.ts and constants/diagrams.ts ----
 const OLD_LAYERS = ["as-built", "intended", "retiring"] as const;
@@ -239,8 +240,9 @@ function rewritePlan(text: string): string {
   return lines.join("\n");
 }
 function frozen(file: string, plans?: string): boolean {
-  const paths = c.MIGRATION_FROZEN_PATHS;
-  return file.split("/").slice(0, -1).includes(paths.directory)
+  const paths = c.MIGRATION_FROZEN_PATHS, directories = file.split("/").slice(0, -1);
+  return directories.includes(paths.directory)
+    || directories.some((part, index) => part === paths.plansSegment && directories[index + 1] === paths.plansDirectory)
     || file.startsWith(`${paths.repoDirectory}/`)
     || (paths.files as readonly string[]).includes(basename(file))
     || !!plans && file.startsWith(`${plans}/${paths.plansDirectory}/`);
@@ -248,19 +250,26 @@ function frozen(file: string, plans?: string): boolean {
 function rewriteDoc(text: string, file: string, migrated: Set<string>): string {
   const repoint = (destination: string, base: string) => {
     const path = destination.split(/[?#]/, 1)[0]!;
-    if (!path || /^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(path)) return destination;
+    if (!path || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(path)) return destination;
     let decoded: string;
     try { decoded = decodeURIComponent(path.replace(/\\([\\()[\] ])/g, "$1")); } catch { return destination; }
-    return migrated.has(resolve(base, decoded)) ? destination.replace(/\.drawio(?=[?#]|$)/, c.EXTENSION) : destination;
+    const target = decoded.startsWith("/") ? resolve(".", decoded.slice(1)) : resolve(base, decoded);
+    if (!migrated.has(target)) return destination;
+    // Preserve the original path spelling (including an encoded dot), query and fragment.
+    const rewritten = path.replace(/(\.|%2e)(?:d|%64)(?:r|%72)(?:a|%61)(?:w|%77)(?:i|%69)(?:o|%6f)$/i,
+      (_suffix, dot) => dot + c.EXTENSION.slice(1));
+    return rewritten + destination.slice(path.length);
   };
   // Consume code fences/spans before links so examples are not mistaken for link destinations.
   return text.replace(
-    /(^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\2[ \t]*$)|(`+)([^\n]*?)\3|(\]\([ \t]*<?)([^<>\s]*(?:\.drawio)(?:[?#][^<>\s)]*)?)(?=>?(?:[ \t]+["'(]|[ \t]*\)))|(^ {0,3}\[[^\]\n]+\]:[ \t]*<?)([^<>\s]+)(?=>?(?:[ \t]|$))/gm,
+    /(^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\2[ \t]*$)|(`+)([^\n]*?)\3|(\]\([ \t]*)(<[^>\n]+>|[^\s<>]+?)(?=[ \t]*(?:\)|["']))|(^ {0,3}\[[^\]\n]+\]:[ \t]*)(<[^>\n]+>|[^\s<>]+)(?=[ \t]|$)/gm,
     (match, fence, _marker, ticks, code, link, destination, definition, reference) => {
       if (fence) return match;
       if (ticks) return `${ticks}${repoint(code, ".")}${ticks}`;
       const prefix = link ?? definition, path = destination ?? reference;
-      return prefix + repoint(path, dirname(file));
+      return prefix + (path.startsWith("<")
+        ? `<${repoint(path.slice(1, -1), dirname(file))}>`
+        : repoint(path, dirname(file)));
     },
   );
 }
@@ -285,7 +294,19 @@ function parseArgs(args: string[]): Options {
 export function main(args = Bun.argv.slice(2)): number {
   const usage = "usage: drawio-to-mermaid.ts --root <diagrams root> [--plans <dir>] [--docs <dir>] [--keep]";
   let options: Options;
-  try { options = parseArgs(args); } catch (error) { console.error(`${(error as Error).message}\n${usage}`); return 1; }
+  const docFiles: string[] = [];
+  try {
+    options = parseArgs(args);
+    if (options.docs) {
+      const repo = realpathSync(".");
+      if (!realpathWithinRoot(repo, options.docs)) throw new Error(`docs directory escapes repository: ${options.docs}`);
+      for (const file of scan(options.docs, "**/*.md")) {
+        const canonical = realpathWithinRoot(repo, file);
+        if (!canonical) throw new Error(`docs file escapes repository: ${file}`);
+        docFiles.push(relative(repo, canonical));
+      }
+    }
+  } catch (error) { console.error(`${(error as Error).message}\n${usage}`); return 1; }
   const sources = scan(options.root, "**/*.drawio").sort();
   const generated: string[] = [], outputs: { source: string; target: string; text: string; count: number }[] = [];
   const errors: string[] = [], keywords: string[] = [], mismatches: string[] = [];
@@ -321,7 +342,7 @@ export function main(args = Bun.argv.slice(2)): number {
   const docs: string[] = [];
   if (options.docs) {
     const migrated = new Set([...outputs.map(output => output.source), ...generated].map(source => resolve(source)));
-    for (const file of scan(options.docs, "**/*.md")) {
+    for (const file of docFiles) {
       if (frozen(file, options.plans)) continue;
       const text = readFileSync(file, "utf8"), rewritten = rewriteDoc(text, file, migrated);
       if (rewritten !== text) { writeFileSync(file, rewritten); docs.push(file); }
