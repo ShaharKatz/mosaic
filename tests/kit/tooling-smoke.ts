@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
+import { deepStrictEqual, ok, rejects, strictEqual, throws } from "node:assert";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -914,7 +914,20 @@ function exerciseReplay(rule: string): void {
 	git("init", "-b", "main"); git("config", "commit.gpgsign", "false");
 	commit("code.txt", "base\n", "base");
 	const base = commit("docs/guide.md", "base\n", "base docs");
-	const supportsReplay = invoke(["git", "merge-tree", "--write-tree", `--merge-base=${base}`, base, base]).exitCode === 0;
+	const probeSupportsReplay = (result: { exitCode: number; stderr: string }) => {
+		if (result.exitCode === 0) return true;
+		if (result.exitCode === 129 && /^error: unknown option [`'](?:--)?merge-base(?:=|['`])/m.test(result.stderr)
+			&& /^usage: git merge-tree /m.test(result.stderr)) return false;
+		throw new Error(`merge-tree probe exited ${result.exitCode}\n${result.stderr}`);
+	};
+	strictEqual(probeSupportsReplay({ exitCode: 129, stderr: "error: unknown option `merge-base=HEAD'\nusage: git merge-tree [--write-tree] [<options>] <branch1> <branch2>\n" }), false);
+	throws(() => probeSupportsReplay({ exitCode: 128, stderr: "fatal: unable to read tree" }),
+		/merge-tree probe exited 128\nfatal: unable to read tree/);
+	throws(() => probeSupportsReplay({ exitCode: 129, stderr: "usage: git merge-tree [--write-tree]\n" }), /merge-tree probe exited 129/);
+	throws(() => probeSupportsReplay({ exitCode: 129, stderr: "error: unknown option `unrelated'\nusage: git merge-tree [--write-tree]\n" }), /merge-tree probe exited 129/);
+	console.log("PASS executable replay probe: unknown merge-base option selects fail-closed; fatal/128 and unrelated usage errors fail the smoke");
+	const probe = invoke(["git", "merge-tree", "--write-tree", `--merge-base=${base}`, base, base]);
+	const supportsReplay = probeSupportsReplay({ exitCode: probe.exitCode, stderr: probe.stderr.toString() });
 	const checkReplay = (recorded: string, reviewed: string, current: string, check: (result: ReplayResult) => void) => {
 		const result = replay(recorded, reviewed, current);
 		if (supportsReplay) check(result);
