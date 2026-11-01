@@ -75,7 +75,12 @@ export function groups(root: string, entries: TestEntry[], paths: string[]): Map
     if (selection.includes("::") && entry.testRunner.format !== "pytest") throw new Error(`only pytest supports node IDs (::); ${entry.testRunner.format} requires a file or component selection`);
     const selected = result.get(entry) ?? [];
     result.set(entry, selected);
-    if (file === entry.path && !selection.includes("::")) { selected.length = 0; whole.add(entry); }
+    if (file === entry.path && !selection.includes("::")) {
+      // A runner whose cwd is outside its component still runs only that component.
+      const scope = p.relative(entry.testRunner.cwd, entry.path);
+      selected.length = 0; whole.add(entry);
+      if (scope) selected.push(/^[-@]/.test(scope) ? `./${scope}` : scope);
+    }
     else if (!whole.has(entry)) {
       let argument = p.relative(entry.testRunner.cwd, file) || ".";
       if (selection.includes("::")) argument += selection.slice(selection.indexOf("::"));
