@@ -166,6 +166,7 @@ function evaluate(repoName: string, planArgument?: string): Record<string, strin
         if (dirname(planPath) !== legalDirectory) throw new Error("plan is not in its declared home");
         if (String(data.plan).padStart(4, "0") !== match[1] || data.branch !== branch) throw new Error("plan number or branch does not match");
         if ("base" in data || "base-pr" in data) {
+          if (data.base !== null && data.base !== undefined && typeof data.base !== "string") throw new Error(c.DECLARATION_TYPE_INVALID);
           const base = typeof data.base === "string" && data.base ? data.base : defaultBranch;
           const pr = data["base-pr"] === "" || data["base-pr"] == null ? null : data["base-pr"];
           throw new Error(branched.size > 1 ? c.ambiguousScalarBases(branched) : c.scalarBaseReplacement(targets[0]!, base, pr));
