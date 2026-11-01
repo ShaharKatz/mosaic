@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as p from "node:path";
 import { tmpdir } from "node:os";
 import type { TestEntry } from "../../kit/tools/constants/codex-review.ts";
-import { MUTATION, PROBE, STATUS } from "../../kit/tools/constants/codex-review.ts";
+import { MUTATION, PROBE, STATUS, validateTesting } from "../../kit/tools/constants/codex-review.ts";
 import { groups, inside, mutate, parseReport, provision, route, runTests, safeReplace, stateHash } from "../../kit/tools/codex-review-harness.ts";
 const { install } = await import(process.env.MOSAIC_INSTALLER ?? new URL("../../kit/install.ts", import.meta.url).href);
 const scratch = fs.mkdtempSync(p.join(tmpdir(), "mosaic review smoke "));
@@ -27,6 +27,23 @@ const manifest = {
   rootTest: { testCommand: "uv run --with pytest pytest", testRunner: { format: "pytest", setup: [], argsPrefix: [], cwd: "." } },
 };
 try {
+  for (const testCommand of [
+    "make test < /dev/null > test.log",
+    "make test </dev/null >/dev/null 2>&1",
+    "true < /dev/null > /dev/null",
+    "diff <(make a) <(make b) > out",
+    "sh -c 'cat <in >out'",
+    "[ $(wc -l <f) -gt 1 ] && make >log",
+    "pytest -k 'a<b' -o x=y>z",
+    'python3 -c "assert 1 < 2 > 0"',
+    "cat <in>out",
+  ]) {
+    deepStrictEqual(validateTesting([entry("exit-code", testCommand)]), [entry("exit-code", testCommand)], testCommand);
+  }
+  for (const testCommand of ["npm test -- <file…>", "npm test -- <file...>", "pytest <path>", "--file=<path>"]) {
+    throws(() => validateTesting([entry("exit-code", testCommand)]), /contains a placeholder/, testCommand);
+  }
+  pass("placeholder words are rejected without rejecting shell redirects, substitutions or comparisons");
   const runner = { format: "exit-code", setup: [], argsPrefix: [], cwd: "." };
   for (const topology of ["monorepo", "multi-repo"]) {
     const field = topology === "monorepo" ? "components" : "members";
@@ -46,12 +63,13 @@ try {
       ok(error.message.includes("verbatim") && error.message.includes("runnable as written"), error.message);
       return true;
     }, `${field} placeholder must be rejected before installation`);
-    entries[1].testCommand = "true";
+    entries[1].testCommand = "true < /dev/null > /dev/null";
     fs.writeFileSync(file, JSON.stringify(configured)); await install({ manifest: file, target });
     const metadataPath = p.join(target, ".omp/mosaic.json");
     const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
     strictEqual(metadata.testing[1].testRunner.format, "exit-code");
     strictEqual(command([bun, "tools/doctor.ts"], target), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+    strictEqual(command(["sh", "-c", metadata.testing[1].testCommand], target), "");
     for (const placeholder of ["<file…>", "<path>"]) {
       metadata.testing[1].testCommand = `npm test -- ${placeholder}`;
       fs.writeFileSync(metadataPath, JSON.stringify(metadata));

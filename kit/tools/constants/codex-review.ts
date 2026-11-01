@@ -1,7 +1,7 @@
 import { isAbsolute } from "node:path";
 
 export const FORMATS = ["pytest", "jest", "vitest", "exit-code"] as const;
-export const COMMAND_PLACEHOLDER = /<[^<>\r\n]+>/;
+export const COMMAND_PLACEHOLDER = /(?:^|[\s=])<[^\s<>()|&;'"$`]+>(?=$|[\s;|&)])/;
 export type Runner = { format: typeof FORMATS[number]; setup: string[]; argsPrefix: string[]; cwd: string; env?: Record<string, string>; verifyCommand?: string };
 export type TestEntry = { repository: string; path: string; testCommand: string; testRunner: Runner };
 export const STATUS = { pass: "PASS", failed: "FAILED", error: "ERROR" } as const;
