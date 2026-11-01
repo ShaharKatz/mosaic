@@ -44,6 +44,11 @@ export const PARENT_PR_SUFFIX = ["--json", `state,baseRefName,headRefName,headRe
 export const FRONTMATTER_ERROR = "unreadable plan frontmatter: ";
 export const DECLARATION_TYPE_INVALID = "invalid base or base-pr";
 export const FRONTMATTER_NOT_MAPPING = "frontmatter must be a mapping";
+export const SCALAR_BASE_REPLACEMENT = "use bases, not scalar declarations: replace base/base-pr with bases";
+export const scalarBaseReplacement = (repo: string, base: string, pr: unknown) =>
+  `${SCALAR_BASE_REPLACEMENT}: { ${JSON.stringify(repo)}: { base: ${JSON.stringify(base)}, base-pr: ${JSON.stringify(pr)} } }`;
+export const ambiguousScalarBases = (repositories: Iterable<string>) =>
+  `${SCALAR_BASE_REPLACEMENT}; scalar values are ambiguous across repositories: ${[...repositories].join(", ")}; each needs its own entry`;
 export const quote = (value: string): string => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
 export const remoteRef = (branch: string) => `${ORIGIN}/${branch}`;
 export const trackingRef = (branch: string) => `refs/remotes/${ORIGIN}/${branch}`;

@@ -232,6 +232,53 @@ try {
   function regression(name: string, body: (repo: Repo) => void) {
     try { test(name, body); } catch (error) { revisionFailures.push(name); console.error(String(error)); }
   }
+  for (const [label, fields, replacement] of [
+    ["stacked", "base: some-branch\nbase-pr: 12", 'bases: { "link-repo": { base: "some-branch", base-pr: 12 } }'],
+    ["empty", "base:\nbase-pr:", 'bases: { "link-repo": { base: "trunk", base-pr: null } }'],
+    ["missing-base", "base-pr:", 'bases: { "link-repo": { base: "trunk", base-pr: null } }'],
+  ]) regression(`scalar_base_replacement[${label}]`, r => {
+    r.git("switch", "-c", CHILD); r.plan();
+    r.put(r.planPath, `---\nplan: "9902"\nrepo: link-repo\nbranch: ${CHILD}\n${fields}\n---\n`);
+    r.cannot(undefined, undefined, `unreadable plan frontmatter: use bases, not scalar declarations: replace base/base-pr with ${replacement}`);
+  });
+  for (const cross of [false, true]) regression(`scalar_base_repository_keys[cross=${cross}]`, link => {
+    const a = new Repo(), b = new Repo();
+    for (const [name, member] of [["a", a], ["b", b]] as const) {
+      eq(Bun.spawnSync(["mv", member.work, join(link.work, name)]).exitCode, 0);
+      member.work = join(link.work, name);
+    }
+    link.config([{ name: "link-repo", path: ".", remote: link.remote }, { name: "a", path: "a", remote: a.remote }, { name: "b", path: "b", remote: b.remote }], "multi-repo");
+    link.git("switch", "-c", CHILD);
+    const path = cross ? "docs/plans/9902-child.md" : "a/docs/plans/9902-child.md";
+    link.put(path, `---\nplan: "9902"\nrepo: ${cross ? "[a, b]" : "a"}\nbranch: ${CHILD}\nbase: some-branch\nbase-pr: 12\n---\n`);
+    if (!cross) a.git("switch", "-c", CHILD);
+    const expected = cross
+      ? "use bases, not scalar declarations: replace base/base-pr with bases; scalar values are ambiguous across repositories: a, b, link-repo; each needs its own entry"
+      : 'use bases, not scalar declarations: replace base/base-pr with bases: { "a": { base: "some-branch", base-pr: 12 } }';
+    link.cannot(["--repo", cross ? "link-repo" : "a", "--plan", path], undefined, `unreadable plan frontmatter: ${expected}`);
+  });
+  for (const base of ["1234", "true"]) regression(`scalar_base_invalid_type[${base}]`, r => {
+    r.git("switch", "-c", CHILD); r.plan();
+    r.put(r.planPath, `---\nplan: "9902"\nrepo: link-repo\nbranch: ${CHILD}\nbase: ${base}\nbase-pr:\n---\n`);
+    r.cannot(undefined, undefined, c.FRONTMATTER_ERROR + c.DECLARATION_TYPE_INVALID);
+  });
+  for (const name of ["01", "1e3", "1.0"]) regression(`scalar_base_apply_numeric_repository[${name}]`, link => {
+    const member = new Repo();
+    eq(Bun.spawnSync(["mv", member.work, join(link.work, name)]).exitCode, 0);
+    member.work = join(link.work, name); member.git("switch", "-c", CHILD);
+    link.config([{ name: "link-repo", path: ".", remote: link.remote }, { name, path: name, remote: member.remote }], "multi-repo");
+    const path = `${name}/docs/plans/9902-child.md`, fields = "base:\nbase-pr:";
+    const text = `---\nplan: "9902"\nrepo: "${name}"\nbranch: ${CHILD}\n${fields}\n---\n`;
+    link.put(path, text);
+    const args = ["--repo", name, "--plan", path], before = link.run(args);
+    eq(before.exitCode, 2); eq(before.stdout.toString(), "");
+    const replacement = /replace base\/base-pr with (bases: .*)\n$/.exec(before.stderr.toString());
+    ok(replacement, before.stderr.toString());
+    link.put(path, text.replace(fields, replacement[1]!));
+    const after = link.run(args);
+    eq(after.exitCode, 0, after.stderr.toString()); eq(after.stderr.toString(), "");
+    ok(after.stdout.toString().includes("action=none\n"), after.stdout.toString());
+  });
   for (const state of ["open", "merged"]) for (const position of ["excluded", "replayed"]) {
     regression(`S1_foreign_subject[${state},${position}]`, r => {
       r.setup();
