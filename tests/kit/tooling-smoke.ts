@@ -877,6 +877,7 @@ function exerciseReplay(rule: string): void {
 		return invoke(["bash", "-c", command]);
 	};
 	const isCode = (file: string) => !file.startsWith("docs/") && !file.endsWith(".md");
+	type ReplayResult = { kind: string; conflicts: string[]; delta: string[] };
 	const replay = (recorded: string, reviewed: string, current: string) => {
 		const values: Record<string, string> = { "<recorded base sha>": recorded, "<last reviewed sha>": reviewed, "<base sha>": current };
 		for (const [prefix, key] of [["git merge-base <recorded", "<old base>"], ["git merge-base <base", "<new base>"]]) {
@@ -913,32 +914,40 @@ function exerciseReplay(rule: string): void {
 	git("init", "-b", "main"); git("config", "commit.gpgsign", "false");
 	commit("code.txt", "base\n", "base");
 	const base = commit("docs/guide.md", "base\n", "base docs");
+	const supportsReplay = invoke(["git", "merge-tree", "--write-tree", `--merge-base=${base}`, base, base]).exitCode === 0;
+	const checkReplay = (recorded: string, reviewed: string, current: string, check: (result: ReplayResult) => void) => {
+		const result = replay(recorded, reviewed, current);
+		if (supportsReplay) check(result);
+		else deepStrictEqual(result, { kind: "full", conflicts: [], delta: [] }, "unsupported merge-tree fails closed with no tree or delta");
+	};
 	git("checkout", "-b", "reviewed");
 	commit("code.txt", "reviewed\n", "reviewed code");
 	const reviewed = commit("docs/guide.md", "reviewed\n", "reviewed docs");
-	strictEqual(replay(base, reviewed, base).kind, "none", "unchanged head");
+	checkReplay(base, reviewed, base, result => strictEqual(result.kind, "none", "unchanged head"));
 	git("checkout", "main");
 	const upstream = commit("upstream.txt", "inherited\n", "new base");
 	git("checkout", "reviewed"); git("rebase", upstream);
-	strictEqual(replay(base, reviewed, upstream).kind, "none", "unchanged rebase excludes inherited code");
+	checkReplay(base, reviewed, upstream, result => strictEqual(result.kind, "none", "unchanged rebase excludes inherited code"));
 	git("reset", "--soft", upstream); git("commit", "-m", "squash");
-	strictEqual(replay(base, reviewed, upstream).kind, "none", "unchanged squash");
+	checkReplay(base, reviewed, upstream, result => strictEqual(result.kind, "none", "unchanged squash"));
 	commit("code.txt", "changed\n", "own change");
-	deepStrictEqual(replay(base, reviewed, upstream).delta, ["code.txt"], "own code detected");
+	checkReplay(base, reviewed, upstream, result => deepStrictEqual(result.delta, ["code.txt"], "own code detected"));
 	git("checkout", "-b", "docs-base", upstream);
 	const docsBase = commit("docs/guide.md", "upstream docs\n", "docs conflict");
 	git("checkout", "-b", "docs-head", docsBase);
 	commit("code.txt", "reviewed\n", "replayed code");
 	commit("docs/guide.md", "resolved docs\n", "resolved docs");
-	strictEqual(replay(base, reviewed, docsBase).kind, "none", "docs-only conflict needs no round");
+	checkReplay(base, reviewed, docsBase, result => strictEqual(result.kind, "none", "docs-only conflict needs no round"));
 	git("checkout", "-b", "code-base", upstream);
 	const codeBase = commit("code.txt", "upstream code\n", "code conflict");
 	git("checkout", "-b", "code-head", codeBase);
 	commit("code.txt", "resolved code\n", "resolution");
 	commit("docs/guide.md", "reviewed\n", "reviewed docs");
-	deepStrictEqual(replay(base, reviewed, codeBase).conflicts, ["code.txt"], "code conflict requires delta with both patches");
-	strictEqual(replay("missing-recorded-base", reviewed, codeBase).kind, "full", "missing recorded base forces full round");
-	console.log("PASS executable replay: unchanged head/rebase/squash empty; own code detected; docs/code conflicts classified; missing base forces full round");
+	checkReplay(base, reviewed, codeBase, result => deepStrictEqual(result.conflicts, ["code.txt"], "code conflict requires delta with both patches"));
+	checkReplay("missing-recorded-base", reviewed, codeBase, result => strictEqual(result.kind, "full", "missing recorded base forces full round"));
+	console.log(supportsReplay
+		? "PASS executable replay (merge-tree supported): unchanged head/rebase/squash empty; own code detected; docs/code conflicts classified; missing base forces full round"
+		: "PASS executable replay (merge-tree unsupported): every case fails closed to full with no tree or delta");
 }
 async function exerciseStackAcceptance(input: Record<string, unknown>): Promise<void> {
 	for (const topology of ["monorepo", "multi-repo"]) for (const mode of ["direct", "pull-request"]) {
