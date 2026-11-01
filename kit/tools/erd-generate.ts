@@ -245,7 +245,10 @@ export function renderSchema(schema: Schema, schemas: Schema[], config: Erd): st
   }
   for (const model of [...schema.models].sort((a, b) => order(a.name, b.name))) for (const item of [...model.fields].sort((a, b) => order(a.name, b.name))) {
     const relation = item.relation; if (!relation?.fields.length) continue;
-    relationship(id(`edge-${model.name}-${item.name}`), id(`model-${model.name}`), oneToOne(model, relation.fields) ? c.ONE_TO_ONE : c.MANY_TO_ONE, id(`model-${relation.target}`),
+    const card = oneToOne(model, relation.fields)
+      ? (item.type.endsWith("?") ? c.ONE_TO_OPTIONAL_ONE : c.ONE_TO_ONE)
+      : (item.type.endsWith("?") ? c.MANY_TO_OPTIONAL_ONE : c.MANY_TO_ONE);
+    relationship(id(`edge-${model.name}-${item.name}`), id(`model-${model.name}`), card, id(`model-${relation.target}`),
       `${relation.fields.join(", ")} → ${relation.references.join(", ")}${relation.onDelete ? ` onDelete: ${relation.onDelete}` : ""}${relation.onUpdate ? ` onUpdate: ${relation.onUpdate}` : ""}${relation.map !== undefined ? ` map: ${JSON.stringify(relation.map)}` : ""}`);
   }
   for (const edge of implicit) relationship(id(`edge-${edge.model.name}-${edge.field.name}`), id(`model-${edge.model.name}`), c.MANY_TO_MANY, id(`model-${edge.target}`),
