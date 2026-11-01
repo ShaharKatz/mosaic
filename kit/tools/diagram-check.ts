@@ -29,7 +29,7 @@ const CLASS = new RegExp(String.raw`^class (${ID}(?:,${ID})*) (\S+)$`);
 const MARKER = /^%% generated: (\S+) from .+; do not edit$/;
 const ER_METADATA = new RegExp(String.raw`^%% @(${ID})(?: (.*))?$`);
 const ENTITY = new RegExp(String.raw`^(${ID})\[${QUOTED}\] \{$`);
-const RELATION = new RegExp(String.raw`^(${ID}) (\}o--\|\||\|o--\|\||\}o--o\{) (${ID}) : ${QUOTED}$`);
+const RELATION = new RegExp(String.raw`^(${ID}) (\}o--\|\||\|o--\|\||\}o--o\||\|o--o\||\}o--o\{) (${ID}) : ${QUOTED}$`);
 // Types and names are Mermaid attribute words or backtick-quoted; keys come from PK/FK/UK.
 const ER_WORD = String.raw`\`[^\`]+\`|[^\s\`"?]+`;
 const ATTRIBUTE_ROW = new RegExp(String.raw`^(${ER_WORD})\?? (${ER_WORD})(?: (?:PK|FK|UK)(?:, (?:PK|FK|UK))*)?(?: "[^"]*")?$`);
