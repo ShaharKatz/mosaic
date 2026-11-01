@@ -1,10 +1,8 @@
 #!/usr/bin/env bun
-// Offline Prisma → generated-only drawio. Parse and preflight everything before mutation.
+// Offline Prisma → generated-only Mermaid erDiagram. Parse and preflight everything before mutation.
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { Drawing, serialize } from "./diagram-check.ts";
-import type { Xml } from "./diagram-check.ts";
-import { CONFIG_PATH, LAYERS, PAGE_WIDTH_LIMIT, diagramPathKey } from "./constants/diagrams.ts";
+import { CONFIG_PATH, ER_ATTRIBUTE_WORD, ER_DIRECTION_TEXT, ER_KEY_WORD, MODE, REPLACED_MODE, REPLACED_MODE_MESSAGE, diagramPathKey } from "./constants/diagrams.ts";
 import * as c from "./constants/erd.ts";
 import type { Erd } from "./constants/erd.ts";
 import { realpathWithinRoot } from "./root-containment.ts";
@@ -164,6 +162,16 @@ export function logicalIds(keys: string[]): Map<string, string> {
   }
   return result;
 }
+// Prisma source text on one line: newlines never occur inside Prisma strings.
+const flat = (text: string) => text.replace(/([([])\s*\n\s*/g, "$1").replace(/\s*\n\s*([)\]])/g, "$1").replace(/\s*\n\s*/g, " ");
+const QUOTED = /\("(?:[^"\\]|\\.)*"\)/g;
+// Mermaid reads an attribute type or name unquoted only as an attribute word that is not a PK/FK/UK key.
+function erName(word: string): string {
+  if (ER_ATTRIBUTE_WORD.test(word) && !ER_KEY_WORD.test(word)) return word;
+  if (/[`\r\n]/.test(word)) throw new Error(`cannot write ${JSON.stringify(word)} as a Mermaid attribute`);
+  return `\`${word}\``;
+}
+const erType = (type: string) => type.endsWith("?") ? `${erName(type.slice(0, -1))}?` : erName(type);
 export function columnRows(model: Model, modelNames: Set<string>): string[] {
   const marked = Object.fromEntries(c.MARKERS.map(([key]) => [key, new Set<string>()]));
   for (const attr of model.attributes) if (marked[attr.name] && attr.arguments.length) {
@@ -174,11 +182,18 @@ export function columnRows(model: Model, modelNames: Set<string>): string[] {
     for (const attr of item.attributes) marked[attr.name]?.add(item.name);
     for (const name of item.relation?.fields ?? []) marked.relation!.add(name);
   }
-  return [...model.fields].sort((a, b) => order(a.name, b.name)).filter(item => !modelNames.has(item.baseType)).map(item =>
-    `${mappedName(item.name, item.attributes)} : ${item.type}${c.MARKERS.filter(([key]) => marked[key]!.has(item.name)).map(([, marker]) => ` ${marker}`).join("")}${item.attributes.filter(a => !["id", "unique", "map"].includes(a.name) && !a.name.startsWith("db.")).map(a => ` ${a.text}`).join("")}`);
+  return [...model.fields].sort((a, b) => order(a.name, b.name)).filter(item => !modelNames.has(item.baseType)).map(item => {
+    const databases = item.attributes.filter(a => a.name.startsWith("db.")).map(a => ` ${a.text}`).join("");
+    const original = item.type.slice(0, item.type.length - databases.length), type = original.replace(QUOTED, "");
+    const keys = c.MARKERS.filter(([key, marker]) => marker !== "IDX" && marked[key]!.has(item.name)).map(([, marker]) => marker).join(", ");
+    const comment = [...(marked.index!.has(item.name) ? ["IDX"] : []), ...(type !== original ? [original] : []),
+      ...item.attributes.filter(a => !["id", "unique", "map", "relation"].includes(a.name)).map(a => flat(a.text))].join(" ").replaceAll('"', "'");
+    return `${erType(type)} ${erName(mappedName(item.name, item.attributes))}${keys ? ` ${keys}` : ""}${comment ? ` "${comment}"` : ""}`;
+  });
 }
-const node = (tag: string, attrs: Record<string, string> = {}, children: Xml[] = []): Xml => ({ tag, attrs, children, text: "" });
-function geometry(values: Record<string, number>): Xml { return node("mxGeometry", { ...Object.fromEntries(Object.entries(values).map(([k, v]) => [k, String(v)])), as: "geometry" }); }
+// Entity and relationship labels: entity codes for what Mermaid misreads, including the space in "direction <dir>".
+const encode = (text: string) => text.replace(/#(?=quot;|\d+;)/g, "#35;").replaceAll('"', "#quot;").replaceAll("%", "#37;").replaceAll("\\", "#92;")
+  .replace(new RegExp(ER_DIRECTION_TEXT.source, "gi"), match => match.replace(/\s+/, "#32;"));
 type ImplicitRelation = { model: Model; field: Field; target: string; source: string; name?: string };
 function implicitRelations(schemas: Schema[]): ImplicitRelation[] {
   const models = new Map(schemas.flatMap(schema => schema.models.map(model => [model.name, model] as const))), edges: ImplicitRelation[] = [];
@@ -215,42 +230,31 @@ export function renderSchema(schema: Schema, schemas: Schema[], config: Erd): st
   keys.push(...schema.enums.map(e => `enum-${e.name}`), ...schema.models.flatMap(m => m.fields.filter(f => f.relation?.fields.length).map(f => `edge-${m.name}-${f.name}`)));
   keys.push(...implicit.map(edge => `edge-${edge.model.name}-${edge.field.name}`));
   const ids = logicalIds(keys), id = (key: string) => ids.get(key)!;
-  const entries: { id: string; label: string; source: string; rows?: string[]; style: string }[] = [];
-  for (const model of [...schema.models].sort((a, b) => order(a.name, b.name))) entries.push({ id: id(`model-${model.name}`), label: `${mappedName(model.name, model.attributes)} (${model.name})`, source: schema.path,
-    rows: [...columnRows(model, new Set(models.keys())), ...model.attributes.map(a => a.text)], style: c.TABLE_STYLE });
-  for (const enumeration of [...schema.enums].sort((a, b) => order(a.name, b.name))) entries.push({ id: id(`enum-${enumeration.name}`), label: `${mappedName(enumeration.name, enumeration.attributes)} (${enumeration.name})`, source: schema.path,
-    rows: [...enumeration.values].sort((a, b) => order(a.name, b.name)).map(v => mappedName(v.name, v.attributes)).concat(enumeration.attributes.map(a => a.text)), style: c.TABLE_STYLE });
-  for (const name of references) entries.push({ id: id(`model-${name}`), label: `${name} (${basename(models.get(name)!.path)})`, source: models.get(name)!.path, style: c.REFERENCE_STYLE });
-  const root = node("root", {}, [node("mxCell", { id: "0" }), node("mxCell", { id: "1", parent: "0" }), ...LAYERS.map(layer => node("mxCell", { id: layer, value: layer, parent: "0" }))]);
-  function element(identifier: string, label: string, source: string, structure: Record<string, string>, values: Record<string, number>): Xml {
-    const cell = node("mxCell", structure, [geometry(values)]);
-    root.children.push(node("object", { id: identifier, label, component: config.component, source }, [cell])); return cell;
+  const lines = [`%% generated: ${c.GENERATED} from ${schema.path}; ${config.label}; do not edit`, "erDiagram"];
+  const meta = (identifier: string, source: string) => lines.push(`  %% @${identifier} component: "${encode(config.component)}", source: "${encode(source)}"`);
+  function entity(identifier: string, label: string, source: string, rows: string[]): void {
+    meta(identifier, source); lines.push(`  ${identifier}["${encode(label)}"] {`, ...rows.map(row => `    ${row}`), "  }");
   }
-  const lane = element("schema", `${config.label} · ${basename(schema.path)} · generated-only; never keeper-edited`, schema.path, { vertex: "1", parent: "as-built", style: c.LANE_STYLE }, {});
-  let y = c.ROW_HEIGHT + c.GRID_GAP;
-  for (let start = 0; start < entries.length; start += c.GRID_COLUMNS) {
-    const group = entries.slice(start, start + c.GRID_COLUMNS), heights = group.map(e => c.ROW_HEIGHT * (e.rows ? e.rows.length + 1 : 2));
-    for (const [column, entry] of group.entries()) {
-      const height = heights[column]!;
-      element(entry.id, entry.label, entry.source, { vertex: "1", parent: "schema", style: entry.style }, { x: c.GRID_GAP + column * (c.TABLE_WIDTH + c.GRID_GAP), y, width: c.TABLE_WIDTH, height });
-      for (const [index, text] of (entry.rows ?? []).entries()) {
-        const rowId = `${entry.id}-row-${index}`;
-        root.children.push(node("mxCell", { id: rowId, parent: entry.id, vertex: "1", style: c.ROW_STYLE, value: "" }, [geometry({ y: c.ROW_HEIGHT * (index + 1), width: c.TABLE_WIDTH, height: c.ROW_HEIGHT })]),
-          node("mxCell", { id: `${rowId}-text`, parent: rowId, vertex: "1", style: c.PARTIAL_STYLE, value: text }, [geometry({ width: c.TABLE_WIDTH, height: c.ROW_HEIGHT })]));
-      }
-    }
-    y += Math.max(...heights) + c.GRID_GAP;
+  for (const model of [...schema.models].sort((a, b) => order(a.name, b.name))) entity(id(`model-${model.name}`), `${mappedName(model.name, model.attributes)} (${model.name})`, schema.path,
+    [...columnRows(model, new Set(models.keys())), ...model.attributes.map(a => `%% ${flat(a.text)}`)]);
+  for (const enumeration of [...schema.enums].sort((a, b) => order(a.name, b.name))) entity(id(`enum-${enumeration.name}`), `${mappedName(enumeration.name, enumeration.attributes)} (${enumeration.name})`, schema.path,
+    [...enumeration.values].sort((a, b) => order(a.name, b.name)).map(v => `enum ${erName(mappedName(v.name, v.attributes))}`).concat(enumeration.attributes.map(a => `%% ${flat(a.text)}`)));
+  for (const name of references) entity(id(`model-${name}`), `${name} (${basename(models.get(name)!.path)})`, models.get(name)!.path, []);
+  function relationship(identifier: string, from: string, card: string, to: string, label: string): void {
+    meta(identifier, schema.path); lines.push(`  ${from} ${card} ${to} : "${encode(label)}"`);
   }
-  lane.children = [geometry({ x: c.MARGIN, y: c.MARGIN, width: c.GRID_COLUMNS * (c.TABLE_WIDTH + c.GRID_GAP) + c.GRID_GAP, height: y })];
   for (const model of [...schema.models].sort((a, b) => order(a.name, b.name))) for (const item of [...model.fields].sort((a, b) => order(a.name, b.name))) {
     const relation = item.relation; if (!relation?.fields.length) continue;
-    element(id(`edge-${model.name}-${item.name}`), `${relation.fields.join(", ")} → ${relation.references.join(", ")}${relation.onDelete ? ` onDelete: ${relation.onDelete}` : ""}${relation.onUpdate ? ` onUpdate: ${relation.onUpdate}` : ""}${relation.map !== undefined ? ` map: ${JSON.stringify(relation.map)}` : ""}`, schema.path,
-      { edge: "1", parent: "schema", source: id(`model-${model.name}`), target: id(`model-${relation.target}`), style: oneToOne(model, relation.fields) ? c.ONE_TO_ONE_STYLE : c.RELATION_STYLE }, { relative: 1 });
+    relationship(id(`edge-${model.name}-${item.name}`), id(`model-${model.name}`), oneToOne(model, relation.fields) ? c.ONE_TO_ONE : c.MANY_TO_ONE, id(`model-${relation.target}`),
+      `${relation.fields.join(", ")} → ${relation.references.join(", ")}${relation.onDelete ? ` onDelete: ${relation.onDelete}` : ""}${relation.onUpdate ? ` onUpdate: ${relation.onUpdate}` : ""}${relation.map !== undefined ? ` map: ${JSON.stringify(relation.map)}` : ""}`);
   }
-  for (const edge of implicit) element(id(`edge-${edge.model.name}-${edge.field.name}`), `m:n${edge.name !== undefined ? ` "${edge.name}"` : ""}`, schema.path,
-    { edge: "1", parent: "schema", source: id(`model-${edge.model.name}`), target: id(`model-${edge.target}`), style: c.MANY_TO_MANY_STYLE }, { relative: 1 });
-  return serialize(node("mxfile", { compressed: "false", generator: c.GENERATED }, [node("diagram", { id: basename(schema.path, ".prisma"), name: basename(schema.path) },
-    [node("mxGraphModel", { page: "1", pageWidth: String(PAGE_WIDTH_LIMIT), pageHeight: String(y + 2 * c.MARGIN) }, [root])])])) + "\n";
+  for (const edge of implicit) relationship(id(`edge-${edge.model.name}-${edge.field.name}`), id(`model-${edge.model.name}`), c.MANY_TO_MANY, id(`model-${edge.target}`),
+    `m:n${edge.name !== undefined ? ` "${edge.name}"` : ""}`);
+  return lines.join("\n") + "\n";
+}
+// Generated files carry the marker on line 1; anything else is hand-authored.
+export function isGenerated(text: string): boolean {
+  return text.split("\n", 1)[0]!.startsWith(`%% generated: ${c.GENERATED} from `);
 }
 function containedPath(root: string, file: string): string {
   // Resolve the nearest existing ancestor, without ever creating anything during --check.
@@ -266,7 +270,8 @@ function containedPath(root: string, file: string): string {
 }
 export function adapterSettings(root = "."): Erd {
   const config = JSON.parse(readFileSync(join(root, CONFIG_PATH), "utf8"));
-  if (config.diagrams?.mode !== "drawio" || !config.diagrams.erd) throw new Error("Prisma ERD adapter requires enabled diagrams.erd and drawio mode");
+  if (config.diagrams?.mode === REPLACED_MODE) throw new Error(REPLACED_MODE_MESSAGE);
+  if (config.diagrams?.mode !== MODE || !config.diagrams.erd) throw new Error(`Prisma ERD adapter requires enabled diagrams.erd and ${MODE} mode`);
   c.validateErd(config.diagrams.erd, config.diagrams.root, config.diagrams.components ?? []); return config.diagrams.erd;
 }
 export function loadSchemas(root: string, config: Erd): Schema[] {
@@ -333,7 +338,7 @@ export function generate(root: string, check = false, selected?: string): number
     console.log(sync.failures.length ? sync.failures.join("\n") : `erd-check: ${sync.expected.size} files match ${sync.schemas} schema files`); return sync.failures.length ? 1 : 0;
   }
   // Never overwrite a hand-authored file, even if someone gives it the generated suffix.
-  const generated = (file: string) => { try { return new Drawing(readFileSync(join(root, file), "utf8")).xml.attrs.generator === c.GENERATED; } catch { return false; } };
+  const generated = (file: string) => { try { return isGenerated(readFileSync(join(root, file), "utf8")); } catch { return false; } };
   for (const file of sync.expected.keys()) if (existsSync(join(root, file)) && !generated(file)) throw new Error(`refusing to overwrite non-generated ERD: ${file}`);
   for (const [file, content] of sync.expected) { mkdirSync(dirname(join(root, file)), { recursive: true }); writeFileSync(join(root, file), content); }
   for (const file of sync.extras) if (file.endsWith(c.SUFFIX) && generated(file)) unlinkSync(join(root, file));

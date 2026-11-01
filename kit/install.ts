@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmod, lstat, mkdir, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
-import { BUNDLE_FILES, DIAGRAMS_ROOT, DRAWIO_PACKAGE, safeRoot, safeDiagramsRoot, diagramPathKey } from "./tools/constants/diagrams.ts";
+import { BUNDLE_FILES, DIAGRAMS_ROOT, MODE, REPLACED_MODE, REPLACED_MODE_MESSAGE, safeRoot, safeDiagramsRoot, diagramPathKey } from "./tools/constants/diagrams.ts";
 import { realpathWithinRoot } from "./tools/root-containment.ts";
 import { headingAnchors } from "./tools/specialists.ts";
 import { validateRunner, validateTesting } from "./tools/constants/codex-review.ts";
@@ -24,7 +24,7 @@ type Manifest = {
   git: { defaultBranch: string };
   tracking: Tracking;
   landing: Landing;
-  diagrams?: { mode: "none" | "drawio"; root?: string; erd?: Erd };
+  diagrams?: { mode: "none" | typeof MODE; root?: string; erd?: Erd };
   remotes: { link: string; members: Record<string, string> };
   members: Member[];
   components: Member[];
@@ -78,15 +78,16 @@ function manifestFrom(value: unknown): Manifest {
   }
   let diagrams: Manifest["diagrams"];
   if (value.diagrams !== undefined) {
-    if (!record(value.diagrams) || !["none", "drawio"].includes(value.diagrams.mode as string)) throw new Error("diagrams.mode must be none or drawio");
-    if (value.diagrams.erd !== undefined && value.diagrams.mode !== "drawio") throw new Error("diagrams.erd requires drawio mode");
+    if (record(value.diagrams) && value.diagrams.mode === REPLACED_MODE) throw new Error(REPLACED_MODE_MESSAGE);
+    if (!record(value.diagrams) || !["none", MODE].includes(value.diagrams.mode as string)) throw new Error(`diagrams.mode must be none or ${MODE}`);
+    if (value.diagrams.erd !== undefined && value.diagrams.mode !== MODE) throw new Error(`diagrams.erd requires ${MODE} mode`);
     if (value.diagrams.mode === "none") {
-      if (value.diagrams.root !== undefined) throw new Error("diagrams.root requires drawio mode");
+      if (value.diagrams.root !== undefined) throw new Error(`diagrams.root requires ${MODE} mode`);
       diagrams = { mode: "none" };
     } else {
       const root = value.diagrams.root ?? DIAGRAMS_ROOT;
       if (!safeRoot(root)) throw new Error("diagrams.root must be a safe repo-relative directory");
-      diagrams = { mode: "drawio", root, ...(value.diagrams.erd !== undefined ? { erd: value.diagrams.erd as Erd } : {}) };
+      diagrams = { mode: MODE, root, ...(value.diagrams.erd !== undefined ? { erd: value.diagrams.erd as Erd } : {}) };
     }
   }
   line(value.project.name, "project.name");
@@ -111,7 +112,7 @@ function manifestFrom(value: unknown): Manifest {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || names.has(name)) throw new Error(`${field}.name is invalid or duplicate: ${name}`);
       if (isAbsolute(entryPath) || entryPath.includes("\\") || entryPath.split("/").some(part => part === "." || part === "..")
         || !entryPath.replace(/\/+$/, "") || paths.has(entryPath.replace(/\/+$/, ""))) throw new Error(`${field}.path is invalid or duplicate: ${entryPath}`);
-      if (diagrams?.mode === "drawio" && !safeRoot(entryPath.replace(/\/+$/, ""))) throw new Error(`${field}.path is an invalid diagram component binding: ${entryPath}`);
+      if (diagrams?.mode === MODE && !safeRoot(entryPath.replace(/\/+$/, ""))) throw new Error(`${field}.path is an invalid diagram component binding: ${entryPath}`);
       names.add(name);
       paths.add(entryPath.replace(/\/+$/, ""));
       if (label === "members" && topology === "multi-repo") line(remotes[name], `remotes.members.${name}`);
@@ -288,10 +289,10 @@ function render(content: string, file: string, manifest: Manifest): string {
       (_match, mode: string, body: string) => mode === closeOutToken ? body : "")
     .replace(/\{\{(CLOSE_OUT_TWO_COMMIT|CLOSE_OUT_DEFAULT)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
       (_match, mode: string, body: string) => mode === closeOutToken ? body : "")
-    .replace(/^\{\{DIAGRAMS_DRAWIO\}\}\n([\s\S]*?)^\{\{\/DIAGRAMS_DRAWIO\}\}\n?/gm,
-      (_match, body: string) => manifest.diagrams?.mode === "drawio" ? body : "")
-    .replace(/\{\{DIAGRAMS_DRAWIO\}\}([\s\S]*?)\{\{\/DIAGRAMS_DRAWIO\}\}/g,
-      (_match, body: string) => manifest.diagrams?.mode === "drawio" ? body : "")
+    .replace(/^\{\{DIAGRAMS_MERMAID\}\}\n([\s\S]*?)^\{\{\/DIAGRAMS_MERMAID\}\}\n?/gm,
+      (_match, body: string) => manifest.diagrams?.mode === MODE ? body : "")
+    .replace(/\{\{DIAGRAMS_MERMAID\}\}([\s\S]*?)\{\{\/DIAGRAMS_MERMAID\}\}/g,
+      (_match, body: string) => manifest.diagrams?.mode === MODE ? body : "")
     .replace(/^\{\{DIAGRAMS_ERD\}\}\n([\s\S]*?)^\{\{\/DIAGRAMS_ERD\}\}\n?/gm,
       (_match, body: string) => manifest.diagrams?.erd ? body : "")
     .replace(/\{\{DIAGRAMS_ERD\}\}([\s\S]*?)\{\{\/DIAGRAMS_ERD\}\}/g,
@@ -314,7 +315,6 @@ function render(content: string, file: string, manifest: Manifest): string {
       case "MCP_TEAM": return manifest.tracking.mcp?.team ?? "not configured; resolve the target team before creating intent";
       case "MCP_QUEUE": return manifest.tracking.mcp?.queue ?? "not configured; obtain the H-tracking queue ruling before intake";
       case "DIAGRAMS_ROOT": return manifest.diagrams?.root ?? DIAGRAMS_ROOT;
-      case "DRAWIO_PACKAGE": return DRAWIO_PACKAGE;
       case "MEMBERS": return membersFor(file, manifest);
       case "SPECIALIST_ROWS": return manifest.review!.specialists.map(entry =>
         `| \`${entry.agent}\` | ${entry.paths.map(glob => `\`${cell(glob)}\``).join(", ")} | ${entry.context ? `\`${cell(entry.context)}\`` : "none"} |`).join("\n");
@@ -388,7 +388,7 @@ export async function install(options: { manifest: string; target: string; kit?:
     entries.delete("docs/process/final-review.md");
     entries.delete(".omp/rules/final-review.md");
   }
-  if (manifest.diagrams?.mode !== "drawio") {
+  if (manifest.diagrams?.mode !== MODE) {
     const excluded = [...BUNDLE_FILES, "docs/architecture/diagrams"];
     for (const name of entries.keys()) if (excluded.some(p => name === p || name.startsWith(p + "/"))
       || name === ".omp/skills/diagrams" || name === ".claude/skills/diagrams" || (name === "tools/constants" && !testingFor(manifest))) entries.delete(name);
@@ -399,7 +399,7 @@ export async function install(options: { manifest: string; target: string; kit?:
       entries.delete(name); entries.set(destination, entry);
     }
   }
-  if (manifest.diagrams?.mode === "drawio" && !safeDiagramsRoot(manifest.diagrams.root)) throw new Error(`diagrams.root is reserved: ${manifest.diagrams.root}`);
+  if (manifest.diagrams?.mode === MODE && !safeDiagramsRoot(manifest.diagrams.root)) throw new Error(`diagrams.root is reserved: ${manifest.diagrams.root}`);
   const specialists = manifest.review?.specialists ?? [];
   for (const specialist of specialists) {
     if (specialist.context) {
@@ -446,7 +446,7 @@ export async function install(options: { manifest: string; target: string; kit?:
     for (const name of entries.keys()) {
       if (/^(?:\.omp|\.claude)\/skills\/review-with-codex(?:\/|$)/.test(name)
         || name === "tools/codex-review-schema.json" || name === "tools/codex-review-harness.ts"
-        || name === "tools/constants/codex-review.ts" || (name === "tools/constants" && manifest.diagrams?.mode !== "drawio")) entries.delete(name);
+        || name === "tools/constants/codex-review.ts" || (name === "tools/constants" && manifest.diagrams?.mode !== MODE)) entries.delete(name);
     }
   }
   for (const name of entries.keys()) {
@@ -524,7 +524,7 @@ export async function install(options: { manifest: string; target: string; kit?:
   }
   if (manifest.landing.mode === "direct") {
     for (const name of ["docs/process/stacked-prs.md", ".omp/rules/stacked-prs.md", "tools/stack-base.ts", "tools/constants/stack-base.ts"]) entries.delete(name);
-    if (manifest.diagrams?.mode !== "drawio") entries.delete("tools/constants");
+    if (manifest.diagrams?.mode !== MODE) entries.delete("tools/constants");
   }
   const config = entries.get(".omp/mosaic.json");
   if (config?.kind === "file") {
@@ -542,7 +542,7 @@ export async function install(options: { manifest: string; target: string; kit?:
         { name: "link-repo", path: ".", remote: manifest.remotes.link },
         ...(manifest.topology === "multi-repo" ? manifest.members.map(member => ({ name: member.name, path: member.path.replace(/\/+$/, ""), remote: manifest.remotes.members[member.name] })) : []),
       ] } : {}),
-      ...(manifest.diagrams?.mode === "drawio" ? { diagrams: { mode: "drawio", root: manifest.diagrams.root,
+      ...(manifest.diagrams?.mode === MODE ? { diagrams: { mode: MODE, root: manifest.diagrams.root,
         components: (manifest.topology === "monorepo" ? manifest.components : manifest.members).map(member => member.path.replace(/\/+$/, "")),
         ...(manifest.diagrams.erd ? { erd: manifest.diagrams.erd } : {}) } } : {}),
     }, null, 2)}\n`);

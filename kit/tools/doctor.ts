@@ -156,9 +156,9 @@ if (fs.existsSync(path.join(root, configPath))) {
 			}
 			const diagrams = config.diagrams;
 			if (diagrams !== undefined) {
-				if (!diagrams || !["none", "drawio"].includes(diagrams.mode)) throw new Error("diagrams.mode must be none or drawio");
-				if (diagrams.mode === "none" && (diagrams.root !== undefined || diagrams.components !== undefined || diagrams.erd !== undefined)) throw new Error("diagrams settings require drawio mode");
-				if (diagrams.mode === "drawio") {
+				if (!diagrams || !["none", "mermaid", "drawio"].includes(diagrams.mode)) throw new Error("diagrams.mode must be none or mermaid");
+				if (diagrams.mode === "none" && (diagrams.root !== undefined || diagrams.components !== undefined || diagrams.erd !== undefined)) throw new Error("diagrams settings require mermaid mode");
+				if (diagrams.mode !== "none") {
 					// Execute only this doctor's contained sibling; inspected bundle contracts remain data.
 					const ownDirectory = path.dirname(fs.realpathSync(fileURLToPath(import.meta.url)));
 					let ownConstants: string;
@@ -171,6 +171,8 @@ if (fs.existsSync(path.join(root, configPath))) {
 						fs.accessSync(contained, fs.constants.R_OK); ownConstants = contained;
 					} catch { throw new Error("diagrams bundle constants unavailable next to doctor"); }
 					const contract = await import(pathToFileURL(ownConstants).href);
+					if (diagrams.mode === contract.REPLACED_MODE) throw new Error(contract.REPLACED_MODE_MESSAGE);
+					if (diagrams.mode !== contract.MODE) throw new Error("diagrams.mode must be none or mermaid");
 					if (!contract.safeDiagramsRoot(diagrams.root) || !Array.isArray(diagrams.components)
 						|| diagrams.components.some((component: unknown) => !contract.safeRoot(component))) throw new Error("invalid diagrams root or component bindings");
 					diagramsOn = true;
@@ -227,11 +229,10 @@ if (fs.existsSync(path.join(root, configPath))) {
 							}
 						}
 					}
-					try {
-						const mount = JSON.parse(fs.readFileSync(path.join(root, ".mcp.json"), "utf8")).mcpServers?.drawio;
-						if (mount?.command !== contract.DRAWIO_MOUNT.command || JSON.stringify(mount?.args) !== JSON.stringify(contract.DRAWIO_MOUNT.args)) throw new Error("missing or mismatched drawio entry");
-					} catch {
-						finding("FAIL", "diagrams", ".mcp.json", `declare drawio using ${contract.DRAWIO_PACKAGE}; configuration is not running-server proof`);
+					if (fs.existsSync(path.join(root, diagrams.root))) {
+						for (const file of files("diagrams", diagrams.root)) {
+							if (file.endsWith(".drawio")) finding("FAIL", "diagrams", file, "draw.io file left after the Mermaid migration");
+						}
 					}
 				}
 			}

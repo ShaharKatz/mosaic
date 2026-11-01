@@ -15,9 +15,9 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { install } from "../../kit/install.ts";
-import { columnRows, findAttribute, mappedName, parseSchema, renderSchema } from "../../kit/tools/erd-generate.ts";
-import { Drawing } from "../../kit/tools/diagram-check.ts";
-import { DIAGRAMS_ROOT, DRAWIO_MOUNT } from "../../kit/tools/constants/diagrams.ts";
+import { adapterSettings, columnRows, findAttribute, isGenerated, mappedName, parseSchema, renderSchema } from "../../kit/tools/erd-generate.ts";
+import { Diagram } from "../../kit/tools/diagram-check.ts";
+import { DIAGRAMS_ROOT, REPLACED_MODE_MESSAGE } from "../../kit/tools/constants/diagrams.ts";
 import { GENERATED, SUFFIX } from "../../kit/tools/constants/erd.ts";
 import type { Erd } from "../../kit/tools/constants/erd.ts";
 const scratch = mkdtempSync(join(tmpdir(), "mosaic-erd-")), bun = process.execPath;
@@ -70,14 +70,59 @@ function snapshot(root: string): Record<string, string> {
  }
  visit(""); return result;
 }
+// Minimal reader for the generated erDiagram layout; the full grammar lives in tools/diagram-check.ts.
+type ErElement = { id: string; label: string; data: Record<string, string>; rows: string[]; from?: string; card?: string; to?: string };
+function er(text: string): { lines: string[]; elements: ErElement[]; byId: Map<string, ErElement> } {
+ const lines = text.split("\n"), elements: ErElement[] = [], decode = (value: string) => value.replaceAll("#quot;", '"');
+ strictEqual(lines.at(-1), ""); ok(isGenerated(text)); strictEqual(lines[1], "erDiagram");
+ for (let i = 2; i < lines.length - 1; i++) {
+  const meta = /^ {2}%% @(\S+) (.*)$/.exec(lines[i]!); ok(meta, `metadata expected at line ${i + 1}: ${lines[i]}`);
+  const data = Object.fromEntries([...meta[2]!.matchAll(/(\w+): "([^"]*)"/g)].map(m => [m[1]!, decode(m[2]!)]));
+  const statement = lines[++i]!, entity = /^ {2}(\S+)\["([^"]*)"\] \{$/.exec(statement), relation = /^ {2}(\S+) (\S+) (\S+) : "([^"]*)"$/.exec(statement);
+  if (entity) {
+   const rows: string[] = [];
+   while (lines[++i] !== "  }") { ok(lines[i]!.startsWith("    "), `row expected: ${lines[i]}`); rows.push(lines[i]!.slice(4)); }
+   strictEqual(entity[1], meta[1]); elements.push({ id: entity[1]!, label: decode(entity[2]!), data, rows });
+  } else {
+   ok(relation, `statement expected: ${statement}`);
+   elements.push({ id: meta[1]!, label: decode(relation[4]!), data, rows: [], from: relation[1]!, card: relation[2]!, to: relation[3]! });
+  }
+ }
+ return { lines, elements, byId: new Map(elements.map(e => [e.id, e])) };
+}
 async function installed(name: string): Promise<string> {
  const root = join(scratch, name), manifest = join(scratch, "manifest.json");
- writeFileSync(manifest, JSON.stringify({ project: { name: "Example", summary: "An example project." }, topology: "monorepo", git: { defaultBranch: "main" }, members: [], components: [], remotes: { link: "https://example.invalid/project.git" }, diagrams: { mode: "drawio", erd } }));
+ writeFileSync(manifest, JSON.stringify({ project: { name: "Example", summary: "An example project." }, topology: "monorepo", git: { defaultBranch: "main" }, members: [], components: [], remotes: { link: "https://example.invalid/project.git" }, diagrams: { mode: "mermaid", erd } }));
  await install({ manifest, target: root, kitCommit: "smoke" });
- put(root, ".mcp.json", JSON.stringify({ mcpServers: { drawio: DRAWIO_MOUNT } }));
  put(root, "schema/models/owner.prisma", fixture); put(root, "schema/models/other.prisma", other);
  return root;
 }
+const ownerErd = `%% generated: mosaic-prisma-erd from schema/models/owner.prisma; Schema; do not edit
+erDiagram
+  %% @model-owner component: "platform", source: "schema/models/owner.prisma"
+  model-owner["owner_table (Owner)"] {
+    String first_id PK, FK, UK "IDX"
+    String generated "@default(dbgenerated('concat('a,//', 'b')'))"
+    Decimal? native "@db.Decimal(14, 6)"
+    Unsupported? opaque "Unsupported('vector(3)')?"
+    Int second PK, FK, UK "IDX"
+    %% @@id([first, second])
+    %% @@unique([second, first], map: "owner_unique")
+    %% @@index([first(sort: Desc), second], type: BTree, map: "owner_index")
+    %% @@map("owner_table")
+  }
+  %% @enum-status component: "platform", source: "schema/models/owner.prisma"
+  enum-status["status_type (Status)"] {
+    enum live
+    enum wire-value
+    %% @@map("status_type")
+  }
+  %% @model-other component: "platform", source: "schema/models/other.prisma"
+  model-other["Other (other.prisma)"] {
+  }
+  %% @edge-owner-remote component: "platform", source: "schema/models/owner.prisma"
+  model-owner |o--|| model-other : "first, second → a, b onDelete: Cascade"
+`;
 try {
  const schema = parseSchema(fixture, "schema/models/owner.prisma"), model = schema.models[0]!, fields = Object.fromEntries(model.fields.map(f => [f.name, f]));
  strictEqual(mappedName(model.name, model.attributes), "owner_table");
@@ -86,19 +131,21 @@ try {
  deepStrictEqual(findAttribute(fields.generated!.attributes, "default")!.arguments, [`dbgenerated("concat('a,//', 'b')")`]);
  deepStrictEqual(fields.remote!.relation, { target: "Other", fields: ["first", "second"], references: ["a", "b"], onDelete: "Cascade" });
  const rows = columnRows(model, new Set(["Owner", "Other"]));
- ok(rows.includes("first_id : String PK FK U IDX")); ok(rows.includes("second : Int PK FK U IDX")); ok(!rows.some(row => row.startsWith("remote")));
+ ok(rows.includes('String first_id PK, FK, UK "IDX"')); ok(rows.includes('Int second PK, FK, UK "IDX"')); ok(!rows.some(row => row.includes(" remote")));
+ ok(rows.includes(`Unsupported? opaque "Unsupported('vector(3)')?"`)); ok(rows.includes('Decimal? native "@db.Decimal(14, 6)"'));
  strictEqual(mappedName(schema.enums[0]!.name, schema.enums[0]!.attributes), "status_type");
  deepStrictEqual(schema.enums[0]!.values.map(v => mappedName(v.name, v.attributes)), ["live", "wire-value"]);
- const schemas = [schema, parseSchema(other, "schema/models/other.prisma")], drawing = new Drawing(renderSchema(schema, schemas, erd));
- strictEqual(drawing.byId.get("model-other")!.metadata.attrs.source, "schema/models/other.prisma");
- strictEqual(drawing.byId.get("model-other")!.metadata.attrs.label, "Other (other.prisma)");
- strictEqual(drawing.byId.get("edge-owner-remote")!.metadata.attrs.label, "first, second → a, b onDelete: Cascade");
- strictEqual(drawing.byId.get("edge-owner-remote")!.cell.attrs.target, "model-other"); pass("semantics");
+ const schemas = [schema, parseSchema(other, "schema/models/other.prisma")], ownerText = renderSchema(schema, schemas, erd), drawing = er(ownerText);
+ strictEqual(ownerText, ownerErd);
+ strictEqual(drawing.byId.get("model-other")!.data.source, "schema/models/other.prisma");
+ strictEqual(drawing.byId.get("model-other")!.label, "Other (other.prisma)"); deepStrictEqual(drawing.byId.get("model-other")!.rows, []);
+ strictEqual(drawing.byId.get("edge-owner-remote")!.label, "first, second → a, b onDelete: Cascade");
+ strictEqual(drawing.byId.get("edge-owner-remote")!.to, "model-other"); pass("semantics");
  for (const [index, [attribute, a, b]] of [
-  ['@@id(name: "pk", fields: [a])', " PK", ""], ['@@unique(fields: [a, b], name: "pair")', " U", " U"], ["@@index(fields: [a, b])", " IDX", " IDX"], ['@@unique([a, b], name: "pair")', " U", " U"],
+  ['@@id(name: "pk", fields: [a])', " PK", ""], ['@@unique(fields: [a, b], name: "pair")', " UK", " UK"], ["@@index(fields: [a, b])", ' "IDX"', ' "IDX"'], ['@@unique([a, b], name: "pair")', " UK", " UK"],
  ].entries()) {
   const parsed = parseSchema(`model Pair {\n a String\n b Int\n c String\n ${attribute}\n}`, "pair.prisma");
-  deepStrictEqual(columnRows(parsed.models[0]!, new Set(["Pair"])), [`a : String${a}`, `b : Int${b}`, "c : String"]); pass(`composite-${index}`);
+  deepStrictEqual(columnRows(parsed.models[0]!, new Set(["Pair"])), [`String a${a}`, `Int b${b}`, "String c"]); pass(`composite-${index}`);
  }
  const countInputs = [
   "model Item {\n id Int @id\n}", "enum State {\n on\n off\n}", "// model Fake {\nmodel Item {\n id Int\n}",
@@ -114,9 +161,9 @@ try {
  }
  for (const input of schemas) {
   const first = renderSchema(input, schemas, erd); strictEqual(first, renderSchema(input, schemas, erd));
-  const d = new Drawing(first); strictEqual(d.xml.attrs.compressed, "false"); strictEqual(d.xml.attrs.generator, GENERATED);
-  deepStrictEqual(d.cells.filter(e => e.cell.attrs.parent === "0").map(e => e.id), ["1", "as-built", "intended", "retiring"]);
-  for (const cell of d.elements) { ok(cell.metadata.attrs.id && cell.metadata.attrs.label && cell.metadata.attrs.source); strictEqual(cell.metadata.attrs.component, "platform"); ok(!("id" in cell.cell.attrs) && !("value" in cell.cell.attrs)); strictEqual(d.layer(cell), "as-built"); }
+  const d = er(first); strictEqual(d.lines[0], `%% generated: ${GENERATED} from ${input.path}; ${erd.label}; do not edit`);
+  ok(!d.byId.has("schema")); ok(d.elements.length > 0);
+  for (const cell of d.elements) { ok(cell.id && cell.label && cell.data.source); deepStrictEqual(Object.keys(cell.data), ["component", "source"]); strictEqual(cell.data.component, "platform"); }
  }
  pass("metadata");
  const root = await installed("sync café"); cli(root);
@@ -127,7 +174,7 @@ try {
   const fresh = await installed(`drift-${mutation}`); cli(fresh);
   let file = `${erd.output}/owner${SUFFIX}`;
   if (mutation === "alter") put(fresh, file, readFileSync(join(fresh, file), "utf8") + "\n");
-  if (mutation === "extra" || mutation === "notes") { file = `${erd.output}/${mutation === "extra" ? "hand-authored.drawio" : "notes.md"}`; put(fresh, file, "unexpected file"); }
+  if (mutation === "extra" || mutation === "notes") { file = `${erd.output}/${mutation === "extra" ? "hand-authored.mmd" : "notes.md"}`; put(fresh, file, "unexpected file"); }
   if (mutation === "orphan") rmSync(join(fresh, "schema/models/owner.prisma"));
   if (mutation === "missing") rmSync(join(fresh, file));
   const before = snapshot(fresh), output = cli(fresh, 1, "--check");
@@ -145,11 +192,11 @@ try {
   cli(fresh, 0, "--check", "--file", suffix ? "models/owner.prisma" : "schema/models/owner.prisma"); pass(`selection-${suffix ? "suffix" : "root"}`);
  }
  const casesSchema = parseSchema(`model Foo {\n id String @id\n parentId String\n parent foo @relation(fields: [parentId], references: [id])\n}\nmodel foo {\n id String @id\n parentId String\n parent Foo @relation(fields: [parentId], references: [id])\n}`, "case.prisma");
- const caseDrawing = new Drawing(renderSchema(casesSchema, [casesSchema], erd)), ids = caseDrawing.cells.map(e => e.id);
+ const caseDrawing = er(renderSchema(casesSchema, [casesSchema], erd)), ids = caseDrawing.elements.map(e => e.id);
  strictEqual(ids.length, new Set(ids).size);
  for (const id of ids) ok(/^[a-z0-9][a-z0-9._-]*$/.test(id));
- const tables = Object.fromEntries(caseDrawing.elements.filter(e => ["Foo (Foo)", "foo (foo)"].includes(e.metadata.attrs.label!)).map(e => [e.metadata.attrs.label!, e.id]));
- deepStrictEqual(new Set(caseDrawing.elements.filter(e => e.cell.attrs.edge).map(e => `${e.cell.attrs.source}→${e.cell.attrs.target}`)), new Set([`${tables["Foo (Foo)"]}→${tables["foo (foo)"]}`, `${tables["foo (foo)"]}→${tables["Foo (Foo)"]}`])); pass("case-distinct");
+ const tables = Object.fromEntries(caseDrawing.elements.filter(e => ["Foo (Foo)", "foo (foo)"].includes(e.label)).map(e => [e.label, e.id]));
+ deepStrictEqual(new Set(caseDrawing.elements.filter(e => e.from).map(e => `${e.from}→${e.to}`)), new Set([`${tables["Foo (Foo)"]}→${tables["foo (foo)"]}`, `${tables["foo (foo)"]}→${tables["Foo (Foo)"]}`])); pass("case-distinct");
  const undefinedRoot = await installed("undefined"); cli(undefinedRoot); rmSync(join(undefinedRoot, "schema/models/other.prisma"));
  const undefinedBefore = snapshot(undefinedRoot);
  for (const args of [["--check"], []]) ok(/schema\/models\/owner.prisma:\d+: undefined relation model Other/.test(cli(undefinedRoot, 1, ...args)));
@@ -164,8 +211,8 @@ try {
  put(cleanup, `${erd.output}/owner${SUFFIX}`, "hand-authored"); ok(cli(cleanup, 1).includes("refusing to overwrite non-generated")); pass("orphan cleanup only generated files");
  const stable = readFileSync(join(root, `${erd.output}/owner${SUFFIX}`)); cli(root); deepStrictEqual(readFileSync(join(root, `${erd.output}/owner${SUFFIX}`)), stable); pass("byte-identical rerun");
  const collision = await installed("collisions"); put(collision, "schema/extra/owner.prisma", "model Extra { id Int @id }"); cli(collision); cli(collision, 0, "--check");
- const collisionDrawings = readdirSync(join(collision, erd.output)).map(file => new Drawing(readFileSync(join(collision, erd.output, file), "utf8")));
- deepStrictEqual(new Set(collisionDrawings.map(d => d.byId.get("schema")!.metadata.attrs.source)), new Set(["schema/models/owner.prisma", "schema/extra/owner.prisma", "schema/models/other.prisma"])); pass("split basename collision");
+ const collisionMarkers = readdirSync(join(collision, erd.output)).map(file => /^%% generated: \S+ from (\S+);/.exec(er(readFileSync(join(collision, erd.output, file), "utf8")).lines[0]!)![1]);
+ deepStrictEqual(new Set(collisionMarkers), new Set(["schema/models/owner.prisma", "schema/extra/owner.prisma", "schema/models/other.prisma"])); pass("split basename collision");
  const escape = await installed("escape"); mkdirSync(join(scratch, "outside")); symlinkSync(join(scratch, "outside"), join(escape, erd.output)); const escapeError = cli(escape, 1); ok(escapeError.includes("outside repository") || escapeError.includes("symlinks")); deepStrictEqual(readdirSync(join(scratch, "outside")), []); pass("output symlink escape");
  // Actual installed commands, real history, schema edit, stale check, regeneration and declaration comparison.
  command(root, ["git", "init", "-b", "main"], 0); command(root, ["git", "add", "."], 0);
@@ -194,17 +241,17 @@ try {
  }
  await regression("implicit unnamed many-to-many", () => {
   const s = parseSchema("model User {\n id Int @id\n tags Tag[]\n}\nmodel Tag {\n id Int @id\n users User[]\n}", "many.prisma");
-  const d = new Drawing(renderSchema(s, [s], erd)), edges = d.elements.filter(e => e.cell.attrs.edge);
-  deepStrictEqual(edges.map(e => [e.id, e.metadata.attrs.label, e.cell.attrs.source, e.cell.attrs.target]), [["edge-tag-users", "m:n", "model-tag", "model-user"]]);
-  ok(edges[0]!.cell.attrs.style!.includes("startArrow=ERmany;endArrow=ERmany;"));
+  const d = er(renderSchema(s, [s], erd)), edges = d.elements.filter(e => e.from);
+  deepStrictEqual(edges.map(e => [e.id, e.label, e.from, e.card, e.to]), [["edge-tag-users", "m:n", "model-tag", "}o--o{", "model-user"]]);
  });
  await regression("implicit named and cross-file many-to-many", async () => {
   const a = parseSchema('model Account {\n id Int @id\n tags Tag[] @relation("Primary")\n saved Tag[] @relation(name: "Saved")\n}', "schema/account.prisma");
   const b = parseSchema('model Tag {\n id Int @id\n accounts Account[] @relation(name: "Primary")\n savers Account[] @relation("Saved")\n}', "schema/tag.prisma");
-  const d = new Drawing(renderSchema(a, [a, b], erd)), reverse = new Drawing(renderSchema(b, [a, b], erd));
-  deepStrictEqual(d.elements.filter(e => e.cell.attrs.edge).map(e => [e.id, e.metadata.attrs.label]).sort(), [["edge-account-saved", 'm:n "Saved"'], ["edge-account-tags", 'm:n "Primary"']]);
-  strictEqual(d.byId.get("model-tag")!.metadata.attrs.source, "schema/tag.prisma");
-  deepStrictEqual(reverse.elements.filter(e => e.cell.attrs.edge), []);
+  const text = renderSchema(a, [a, b], erd), d = er(text), reverse = er(renderSchema(b, [a, b], erd));
+  deepStrictEqual(d.elements.filter(e => e.from).map(e => [e.id, e.label]).sort(), [["edge-account-saved", 'm:n "Saved"'], ["edge-account-tags", 'm:n "Primary"']]);
+  ok(text.includes(': "m:n #quot;Saved#quot;"'));
+  strictEqual(d.byId.get("model-tag")!.data.source, "schema/tag.prisma");
+  deepStrictEqual(reverse.elements.filter(e => e.from), []);
   const fresh = await installed("many-to-many");
   put(fresh, "schema/models/owner.prisma", 'model Account {\n id Int @id\n tags Tag[] @relation("Primary")\n saved Tag[] @relation(name: "Saved")\n}');
   put(fresh, "schema/models/other.prisma", 'model Tag {\n id Int @id\n accounts Account[] @relation(name: "Primary")\n savers Account[] @relation("Saved")\n}');
@@ -221,17 +268,17 @@ try {
   for (const constraint of ["id Int @id\n accountId Int @unique", "id Int @id\n accountId Int\n @@unique([accountId])", "id Int @id\n accountId Int\n @@id([accountId])", "accountId Int @id"]) {
    const s = parseSchema(`model Profile {\n ${constraint}\n account Account @relation(fields: [accountId], references: [id], onDelete: Cascade, onUpdate: Restrict)\n}\nmodel Account {\n id Int @id\n}`, "one.prisma");
    strictEqual(s.models[0]!.fields.find(f => f.name === "account")!.relation!.onUpdate, "Restrict");
-   const edge = new Drawing(renderSchema(s, [s], erd)).byId.get("edge-profile-account")!;
-   strictEqual(edge.metadata.attrs.label, "accountId → id onDelete: Cascade onUpdate: Restrict");
-   ok(edge.cell.attrs.style!.includes("startArrow=ERone;endArrow=ERone;"));
+   const edge = er(renderSchema(s, [s], erd)).byId.get("edge-profile-account")!;
+   strictEqual(edge.label, "accountId → id onDelete: Cascade onUpdate: Restrict");
+   strictEqual(edge.card, "|o--||");
   }
   const s = parseSchema("model Child {\n a Int\n b Int\n parent Parent @relation(fields: [a, b], references: [a, b])\n @@unique([a, b])\n}\nmodel Parent {\n a Int\n b Int\n @@id([a, b])\n}", "composite.prisma");
-  ok(new Drawing(renderSchema(s, [s], erd)).byId.get("edge-child-parent")!.cell.attrs.style!.includes("startArrow=ERone;endArrow=ERone;"));
+  strictEqual(er(renderSchema(s, [s], erd)).byId.get("edge-child-parent")!.card, "|o--||");
   for (const constraint of ["@@unique([a, b, extra])", "@@unique([a])"]) {
    const many = parseSchema(`model Child {\n a Int\n b Int\n extra Int\n parent Parent @relation(fields: [a, b], references: [a, b])\n ${constraint}\n}\nmodel Parent {\n a Int\n b Int\n children Child[]\n @@id([a, b])\n}`, "many.prisma");
-   const d = new Drawing(renderSchema(many, [many], erd));
-   strictEqual(d.elements.filter(e => e.cell.attrs.edge).length, 1);
-   ok(d.byId.get("edge-child-parent")!.cell.attrs.style!.includes("startArrow=ERmany;endArrow=ERone;"));
+   const d = er(renderSchema(many, [many], erd));
+   strictEqual(d.elements.filter(e => e.from).length, 1);
+   strictEqual(d.byId.get("edge-child-parent")!.card, "}o--||");
   }
  });
  await regression("named map diagnostic", () => {
@@ -253,7 +300,7 @@ await regression("block comments supported, unterminated rejected", () => {
 await regression("relation constraint name kept", () => {
  const s = parseSchema('model Post {\n id Int @id\n ownerId Int\n owner User @relation(fields: [ownerId], references: [id], map: "fk_owner")\n}\nmodel User {\n id Int @id\n}', "mapped.prisma");
  strictEqual(s.models[0]!.fields.find(f => f.name === "owner")!.relation!.map, "fk_owner");
- strictEqual(new Drawing(renderSchema(s, [s], erd)).byId.get("edge-post-owner")!.metadata.attrs.label, 'ownerId → id map: "fk_owner"');
+ strictEqual(er(renderSchema(s, [s], erd)).byId.get("edge-post-owner")!.label, 'ownerId → id map: "fk_owner"');
  throws(() => parseSchema("model Post {\n id Int @id\n ownerId Int\n owner User @relation(fields: [ownerId], references: [id], map: fk)\n}\nmodel User {\n id Int @id\n}", "badmap.prisma"), /badmap.prisma:4: @relation map requires a string constraint name/);
 });
 await regression("doctor rejects a dangling-symlink output", async () => {
@@ -262,6 +309,27 @@ await regression("doctor rejects a dangling-symlink output", async () => {
  symlinkSync(join(scratch, "missing-erd-target"), join(fresh, erd.output));
  // The FAIL is the point; the unreadable link also yields CANNOT-EVALUATE, which takes exit-code precedence.
  ok(command(fresh, [bun, "tools/doctor.ts"], 2).includes("FAIL mosaic-config .omp/mosaic.json: /mosaic-kit: Error: unsafe ERD output ancestor"));
+});
+await regression("adapter rejects replaced and disabled modes", () => {
+ const fresh = join(scratch, "modes");
+ for (const [mode, message] of [["drawio", REPLACED_MODE_MESSAGE], ["none", "Prisma ERD adapter requires enabled diagrams.erd and mermaid mode"]]) {
+  put(fresh, ".omp/mosaic.json", JSON.stringify({ diagrams: { mode, root: DIAGRAMS_ROOT, erd } }));
+  throws(() => adapterSettings(fresh), (error: Error) => error.message === message);
+ }
+});
+await regression("diagram-check parses generated ERD", () => {
+ const d = new Diagram(ownerErd);
+ strictEqual(d.kind, "erDiagram"); strictEqual(d.generator, GENERATED);
+ deepStrictEqual(d.elements.map(e => e.id), ["model-owner", "enum-status", "model-other", "edge-owner-remote"]);
+ deepStrictEqual(d.byId.get("model-owner")!.rows, er(ownerErd).byId.get("model-owner")!.rows);
+ deepStrictEqual(d.byId.get("edge-owner-remote")!.data, { component: "platform", source: "schema/models/owner.prisma" });
+});
+await regression("names and labels Mermaid would misread are quoted or entity-coded", () => {
+ const s = parseSchema('model Account {\n pk Int @id\n first String @map("first name")\n country Country\n @@map("rate% direction lr")\n}\nenum Country {\n UK\n PK\n FR\n}', "lexer.prisma");
+ const text = renderSchema(s, [s], erd), d = new Diagram(text);
+ for (const row of ["Int `pk` PK", "String `first name`", "Country country", "enum `UK`", "enum `PK`", "enum FR"]) ok(text.includes(`    ${row}\n`), `${row}\n${text}`);
+ ok(text.includes('model-account["rate#37; direction#32;lr (Account)"] {'), text);
+ strictEqual(d.byId.get("model-account")!.label, "rate% direction lr (Account)");
 });
  deepStrictEqual(reviewFailures, []);
  console.log(`erd-smoke: ${cases} cases passed (29 mapped origin cases plus adapter boundaries)`);
