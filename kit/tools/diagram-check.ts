@@ -1,134 +1,229 @@
 #!/usr/bin/env bun
-// Read-only except for the explicit --normalize operation. Run from the project root.
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+// Read-only Mermaid diagram parser and validator. Run from the project root.
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, relative, sep } from "node:path";
-import { inflateRawSync } from "node:zlib";
 import * as c from "./constants/diagrams.ts";
 import { realpathWithinRoot } from "./root-containment.ts";
 
-export type Xml = { tag: string; attrs: Record<string, string>; children: Xml[]; text: string };
-function decode(value: string): string {
-  if (/&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[\da-fA-F]+);)/.test(value)) throw new Error("invalid XML entity");
-  return value.replace(/&(#x[\da-fA-F]+|#\d+|amp|lt|gt|quot|apos);/g, (_, entity: string) => {
-    if (entity.startsWith("#")) {
-      const code = parseInt(entity.slice(entity[1] === "x" ? 2 : 1), entity[1] === "x" ? 16 : 10);
-      if (!(code === 9 || code === 10 || code === 13 || (code >= 0x20 && code <= 0xd7ff) || (code >= 0xe000 && code <= 0xfffd) || (code >= 0x10000 && code <= 0x10ffff))) throw new Error("invalid XML character");
-      return String.fromCodePoint(code);
-    }
-    return ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" } as Record<string, string>)[entity]!;
-  });
+export type Layer = c.Layer;
+export type Element = {
+  id: string;
+  type: "node" | "edge" | "group" | "entity" | "relation";
+  label: string;
+  shape?: string;
+  from?: string; to?: string;
+  parent?: string;
+  classes: string[];
+  data: Record<string, string>;
+  rows: string[];
+  line: number;
+  rowLines: number[];
+};
+const has = (list: readonly string[], value: string | undefined) => value !== undefined && list.includes(value);
+const ID = String.raw`[^\s@{}\[\]"|,:;]+`;
+const QUOTED = String.raw`"([^"\\]*)"`;
+const DATA = new RegExp(String.raw`^(${ID})@\{(.*)\}$`);
+const GROUP = new RegExp(String.raw`^subgraph (${ID})\[${QUOTED}\]$`);
+const EDGE = new RegExp(String.raw`^(${ID}) (${ID})@-->(?:\|${QUOTED}\|)? (${ID})$`);
+const CLASS = new RegExp(String.raw`^class (${ID}(?:,${ID})*) (\S+)$`);
+const MARKER = /^%% generated: (\S+) from .+; do not edit$/;
+const ER_METADATA = new RegExp(String.raw`^%% @(${ID})(?: (.*))?$`);
+const ENTITY = new RegExp(String.raw`^(${ID})\[${QUOTED}\] \{$`);
+const RELATION = new RegExp(String.raw`^(${ID}) (\}o--\|\||\|o--\|\||\}o--o\{) (${ID}) : ${QUOTED}$`);
+// Types and names are Mermaid attribute words or backtick-quoted; keys come from PK/FK/UK.
+const ER_WORD = String.raw`\`[^\`]+\`|[^\s\`"?]+`;
+const ATTRIBUTE_ROW = new RegExp(String.raw`^(${ER_WORD})\?? (${ER_WORD})(?: (?:PK|FK|UK)(?:, (?:PK|FK|UK))*)?(?: "[^"]*")?$`);
+const erWord = (word: string) => word.startsWith("`") || (c.ER_ATTRIBUTE_WORD.test(word) && !c.ER_KEY_WORD.test(word));
+const PAIR = /([a-z][a-zA-Z0-9_]*): (?:([a-z]+)|"([^"\\]*)")/y;
+// Mermaid decodes `#quot;` and numeric `#<code>;` entities in labels and values; `encode` escapes a literal `#` that would read as one.
+// Line breaks follow Mermaid's own pattern (`<br>`, `<br/>`, `<br />`, any case).
+const decode = (value: string, label = false) => {
+  const text = label ? value.replace(/<br\s*\/?>/gi, "\n") : value;
+  return text.replace(/#(quot|\d+);/g, (code, name: string) => name === "quot" ? '"' : Number(name) <= 0x10ffff ? String.fromCodePoint(Number(name)) : code);
+};
+function encode(value: string, label: boolean): string {
+  if (/[\\\r]/.test(value) || (!label && value.includes("\n"))) throw new Error(`unencodable Mermaid value: ${JSON.stringify(value)}`);
+  const text = value.replace(/#(?=quot;|\d+;)/g, "#35;").replace(/"/g, "#quot;");
+  return label ? text.replace(/\n/g, "<br/>") : text;
 }
-// A small XML reader, not an HTML parser: quoted attributes, entities, comments and CDATA;
-// rejects DTDs/external entities and malformed syntax rather than silently repairing it.
-export function parseXml(text: string): Xml {
-  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff\ud800-\udfff]/u.test(text)) throw new Error("invalid XML character");
-  text = text.replace(/\r\n?/g, "\n");
-  const document: Xml = { tag: "", attrs: {}, children: [], text: "" };
-  const stack = [document];
-  let position = 0;
-  while (position < text.length) {
-    const rest = text.slice(position);
-    if (rest.startsWith("<!--")) {
-      const end = text.indexOf("-->", position + 4), comment = text.slice(position + 4, end);
-      if (end < 0 || comment.includes("--") || comment.endsWith("-")) throw new Error("invalid XML comment");
-      position = end + 3; continue;
-    }
-    if (rest.startsWith("<?")) {
-      const end = text.indexOf("?>", position + 2); if (end < 0) throw new Error("invalid XML instruction");
-      position = end + 2; continue;
-    }
-    if (rest.startsWith("<![CDATA[")) {
-      const end = text.indexOf("]]>", position + 9); if (end < 0) throw new Error("invalid XML CDATA");
-      stack.at(-1)!.text += text.slice(position + 9, end); position = end + 3; continue;
-    }
-    if (rest.startsWith("</")) {
-      const match = c.XML_CLOSE_TAG.exec(rest);
-      if (!match || stack.length === 1 || stack.pop()!.tag !== match[1]) throw new Error("invalid XML closing tag");
-      position += match[0].length; continue;
-    }
-    if (rest.startsWith("<")) {
-      const match = c.XML_OPEN_TAG.exec(rest); if (!match) throw new Error("invalid XML opening tag");
-      const node: Xml = { tag: match[1]!, attrs: {}, children: [], text: "" };
-      position += match[0].length;
-      while (true) {
-        const remaining = text.slice(position);
-        const close = /^\s*(\/?>)/.exec(remaining);
-        if (close) {
-          position += close[0].length; stack.at(-1)!.children.push(node);
-          if (close[1] === ">") stack.push(node); break;
-        }
-        const attribute = c.XML_ATTRIBUTE.exec(remaining);
-        if (!attribute || Object.hasOwn(node.attrs, attribute[1]!)) throw new Error("invalid XML attribute");
-        const raw = attribute[2] ?? attribute[3]!;
-        node.attrs[attribute[1]!] = decode(raw.replace(/[\n\r\t]/g, " ")); position += attribute[0].length;
-      }
-      continue;
-    }
-    const end = text.indexOf("<", position);
-    const raw = text.slice(position, end < 0 ? text.length : end);
-    if (raw.includes("]]>")) throw new Error("invalid XML text");
-    stack.at(-1)!.text += decode(raw); position += raw.length;
+/** A label as it sits inside `"…"` in a node data block, an edge `|"…"|` or a group `["…"]`. */
+export const encodeLabel = (text: string) => encode(text, true);
+/** `shape: …, label: "…", k: "v"`: shape and label first, then the pairs in insertion order. */
+export function serializeData(pairs: Record<string, string>, shape?: string, label?: string): string {
+  const parts: string[] = [];
+  if (shape !== undefined) parts.push(`shape: ${shape}`);
+  if (label !== undefined) parts.push(`label: "${encode(label, true)}"`);
+  for (const [key, value] of Object.entries(pairs)) {
+    if (!/^[a-z][a-zA-Z0-9_]*$/.test(key)) throw new Error(`invalid Mermaid key: ${key}`);
+    parts.push(`${key}: "${encode(value, key === "label")}"`);
   }
-  if (stack.length !== 1 || document.children.length !== 1 || document.text.trim()) throw new Error("invalid XML document");
-  return document.children[0]!;
+  return parts.join(", ");
 }
-const escape = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-export function serialize(node: Xml, indent = ""): string {
-  const start = `${indent}<${node.tag}${Object.entries(node.attrs).map(([key, value]) => ` ${key}="${escape(value).replace(/\n/g, "&#10;").replace(/\r/g, "&#13;").replace(/\t/g, "&#9;")}"`).join("")}`;
-  if (!node.children.length && !node.text.trim()) return start + "/>";
-  if (!node.children.length) return `${start}>${escape(node.text)}</${node.tag}>`;
-  return `${start}>\n${node.children.map(child => serialize(child, indent + "  ")).join("\n")}\n${indent}</${node.tag}>`;
+type Pairs = { data: Record<string, string>; shape?: string; label?: string };
+// `node` lifts shape and label out of the data; elsewhere they stay in data and fail check 3 as reserved keys.
+function parsePairs(text: string, node: boolean): Pairs {
+  const result: Pairs = { data: {} }, seen = new Set<string>();
+  for (let offset = 0; offset < text.length;) {
+    PAIR.lastIndex = offset; const match = PAIR.exec(text);
+    if (!match) throw new Error("invalid data pair");
+    const key = match[1]!, bare = match[2], quoted = match[3];
+    if (seen.has(key)) throw new Error(`duplicate key ${key}`); seen.add(key);
+    if ((bare !== undefined) !== (key === "shape")) throw new Error(`invalid value for ${key}`);
+    if (node && key === "shape") { if (!has(c.SHAPES, bare)) throw new Error(`unknown shape ${bare}`); result.shape = bare; }
+    else if (node && key === "label") result.label = decode(quoted!, true);
+    else result.data[key] = bare ?? decode(quoted!, key === "label");
+    offset += match[0].length;
+    if (offset === text.length) break;
+    if (!text.startsWith(", ", offset) || offset + 2 === text.length) throw new Error("invalid data pair separator");
+    offset += 2;
+  }
+  return result;
 }
-export function decodePage(page: Xml): Xml {
-  const model = page.children.find(node => node.tag === "mxGraphModel");
-  if (model) return model;
-  try { return parseXml(decodeURIComponent(inflateRawSync(Buffer.from(page.text.trim(), "base64"), { maxOutputLength: c.MAX_EXPANDED_PAGE_BYTES }).toString())); }
-  catch { throw new Error(c.CHECK_REASONS[1]); }
+function dataBlock(inner: string, node: boolean): Pairs {
+  if (inner === "" || inner === " ") return { data: {} };
+  if (!inner.startsWith(" ") || !inner.endsWith(" ")) throw new Error("invalid data block");
+  return parsePairs(inner.slice(1, -1), node);
 }
-export type Cell = { metadata: Xml; cell: Xml; wrapped: boolean; id: string; legend: boolean };
-export const styles = (cell: Xml): Record<string, string> => Object.fromEntries((cell.attrs.style ?? "").split(";").filter(Boolean).map(part => {
-  const equals = part.indexOf("="); return equals < 0 ? [part, ""] : [part.slice(0, equals), part.slice(equals + 1)];
-}));
-export class Drawing {
-  xml: Xml; model: Xml; cells: Cell[] = []; malformed: Xml[] = []; byId: Map<string, Cell>; elements: Cell[];
+type Line = { text: string; number: number };
+export class Diagram {
+  readonly text: string;
+  readonly kind: "flowchart" | "erDiagram";
+  readonly direction?: "LR" | "TB";
+  readonly generator?: string;
+  readonly elements: Element[] = [];
+  readonly byId = new Map<string, Element>();
+  /** Flowchart `classDef` statement lines in order (check 7). */
+  readonly classDefs: string[] = [];
+  /** Ids named by `class` statements that no element defines (check 2). */
+  readonly unresolvedClassIds: string[] = [];
   constructor(text: string) {
-    this.xml = parseXml(text);
-    const page = this.xml.children.find(node => node.tag === "diagram");
-    this.model = page ? decodePage(page) : this.xml;
-    const root = this.model.children.find(node => node.tag === "root");
-    if (!root) throw new Error(c.CHECK_REASONS[1]);
-    for (const node of root.children) {
-      const wrapped = node.tag === "object";
-      const inner = wrapped ? node.children.filter(child => child.tag === "mxCell") : [node];
-      if (wrapped && inner.length !== 1) { this.malformed.push(node); continue; }
-      if (inner[0]?.tag === "mxCell") this.cells.push({ metadata: node, cell: inner[0], wrapped, id: node.attrs.id ?? "", legend: node.attrs.kind === "legend" });
-    }
-    this.byId = new Map(this.cells.map(cell => [cell.id, cell]));
-    this.elements = this.cells.filter(e => (e.cell.attrs.vertex === "1" || e.cell.attrs.edge === "1") && !this.ancestors(e).some(a => styles(a.cell).shape === "table"));
+    this.text = text;
+    const lines = text.split(/\r?\n/);
+    try {
+      if (MARKER.test(lines[0] ?? "")) {
+        this.kind = "erDiagram"; this.generator = MARKER.exec(lines[0]!)![1];
+        if (lines[1] !== "erDiagram") throw new Error("line 2: expected erDiagram");
+        this.parseEr(lines);
+      } else {
+        this.kind = "flowchart";
+        const statements = lines.map((line, index) => ({ text: line.replace(/^ +/, ""), number: index + 1 })).filter(line => line.text && !line.text.startsWith("%%"));
+        const header = /^flowchart (LR|TB)$/.exec(statements[0]?.text ?? "");
+        if (!header) throw new Error(`line ${statements[0]?.number ?? 1}: expected flowchart LR or flowchart TB`);
+        this.direction = header[1] as "LR" | "TB";
+        this.parseFlowchart(statements.slice(1));
+      }
+    } catch (error) { throw new Error(`${c.CHECK_REASONS[1]}: ${(error as Error).message}`); }
+    for (const e of this.elements) if (!this.byId.has(e.id)) this.byId.set(e.id, e);
   }
-  ancestors(cell: Cell): Cell[] {
-    const result: Cell[] = [], seen = new Set([cell.id]); let parent = cell.cell.attrs.parent;
-    while (parent && this.byId.has(parent) && !seen.has(parent)) {
-      seen.add(parent); const ancestor = this.byId.get(parent)!; result.push(ancestor); parent = ancestor.cell.attrs.parent;
+  private parseFlowchart(statements: Line[]): void {
+    let section = 1, pendingGroup: Element | undefined;
+    const stack: Element[] = [], classes: [number, string[], string][] = [];
+    for (let index = 0; index < statements.length; index++) {
+      const { text, number } = statements[index]!, at = `line ${number}`;
+      const fail = (reason: string): never => { throw new Error(`${at}: ${reason}`); };
+      if (c.FLOWCHART_DIRECTION_TEXT.test(text)) fail("Mermaid reads `direction <dir>` anywhere on a line as a direction statement; reword it or write the space as #32;");
+      const group = pendingGroup; pendingGroup = undefined;
+      const data = DATA.exec(text);
+      if (group && data && data[1] === group.id) {
+        try { group.data = dataBlock(data[2]!, false).data; } catch (error) { fail((error as Error).message); }
+        continue;
+      }
+      if (text.startsWith("classDef ")) { section = 4; this.classDefs.push(text); continue; }
+      if (section === 4) fail("only classDef statements may follow the classDef block");
+      const classLine = CLASS.exec(text);
+      if (classLine) { section = 3; classes.push([number, classLine[1]!.split(","), classLine[2]!]); continue; }
+      if (section === 3) fail("only class and classDef statements may follow class statements");
+      const edge = EDGE.exec(text);
+      if (edge) {
+        if (stack.length) fail("edges must be top level");
+        section = 2;
+        const next = statements[++index], line = next && DATA.exec(next.text);
+        if (!line || line[1] !== edge[2]) fail(`edge ${edge[2]} needs its data line next`);
+        let pairs: Pairs = { data: {} };
+        try { pairs = dataBlock(line![2]!, false); } catch (error) { throw new Error(`line ${next!.number}: ${(error as Error).message}`); }
+        if (edge[3] === "") fail(`edge ${edge[2]} has an empty label; omit |""|`);
+        this.elements.push({ id: edge[2]!, type: "edge", label: decode(edge[3] ?? "", true), from: edge[1], to: edge[4], classes: [], data: pairs.data, rows: [], line: number, rowLines: [] });
+        continue;
+      }
+      if (section === 2) fail("nodes and groups must precede edges");
+      const open = GROUP.exec(text);
+      if (open) {
+        const element: Element = { id: open[1]!, type: "group", label: decode(open[2]!, true), classes: [], data: {}, rows: [], line: number, rowLines: [] };
+        if (stack.length) element.parent = stack.at(-1)!.id;
+        this.elements.push(element); stack.push(element); continue;
+      }
+      if (text === "end") { if (!stack.length) fail("end without subgraph"); pendingGroup = stack.pop(); continue; }
+      if (!data) fail(`unsupported statement: ${text}`);
+      let pairs: Pairs = { data: {} };
+      try { pairs = dataBlock(data![2]!, true); } catch (error) { fail((error as Error).message); }
+      if (pairs.shape === undefined || pairs.label === undefined) fail(`node ${data![1]} needs shape and label`);
+      const element: Element = { id: data![1]!, type: "node", label: pairs.label!, shape: pairs.shape, classes: [], data: pairs.data, rows: [], line: number, rowLines: [] };
+      if (stack.length) element.parent = stack.at(-1)!.id;
+      if (element.data.table === "true") {
+        const [title, ...rows] = element.label.split("\n");
+        element.label = title!; element.rows = rows; element.rowLines = rows.map(() => number);
+      }
+      this.elements.push(element);
     }
+    if (stack.length) throw new Error(`subgraph ${stack.at(-1)!.id} needs end`);
+    const byId = new Map<string, Element>();
+    for (const e of this.elements) if (!byId.has(e.id)) byId.set(e.id, e);
+    for (const [, ids, name] of classes) for (const id of ids) {
+      const element = byId.get(id);
+      if (!element) { if (!this.unresolvedClassIds.includes(id)) this.unresolvedClassIds.push(id); }
+      else if (!element.classes.includes(name)) element.classes.push(name);
+    }
+  }
+  private parseEr(lines: string[]): void {
+    let metadata: { id: string; data: Record<string, string>; number: number } | undefined, entity: Element | undefined;
+    for (let index = 2; index < lines.length; index++) {
+      const number = index + 1, text = lines[index]!.replace(/^ +/, ""), at = `line ${number}`;
+      const fail = (reason: string): never => { throw new Error(`${at}: ${reason}`); };
+      if (entity) {
+        if (text === "}") { entity = undefined; continue; }
+        const row = ATTRIBUTE_ROW.exec(text);
+        if (text.startsWith("%% @@") || (row && erWord(row[1]!) && erWord(row[2]!))) { entity.rows.push(text); entity.rowLines.push(number); continue; }
+        if (!text || text.startsWith("%%")) continue;
+        fail(`invalid entity row: ${text}`);
+      }
+      if (!text) continue;
+      const meta = ER_METADATA.exec(text);
+      if (meta) {
+        if (metadata) fail("metadata must precede an entity or relationship");
+        try { metadata = { id: meta[1]!, data: parsePairs(meta[2] ?? "", false).data, number }; } catch (error) { fail((error as Error).message); }
+        continue;
+      }
+      if (text.startsWith("%%")) { if (metadata) fail("metadata must precede an entity or relationship"); continue; }
+      const open = ENTITY.exec(text), relation = RELATION.exec(text);
+      if (!open && !relation) fail(`unsupported statement: ${text}`);
+      if (c.ER_DIRECTION_TEXT.test(text)) fail("Mermaid reads `direction <dir>` anywhere on this line as a direction statement; write the space as #32;");
+      if (open?.[2]!.includes("%")) fail("Mermaid cannot read % in an entity label; write #37;");
+      if (!metadata || metadata.number !== number - 1) fail("entity or relationship needs its metadata line first");
+      if (open) {
+        if (open[1] !== metadata!.id) fail(`metadata id ${metadata!.id} does not match entity ${open[1]}`);
+        entity = { id: open[1]!, type: "entity", label: decode(open[2]!, true), classes: [], data: metadata!.data, rows: [], line: number, rowLines: [] };
+        this.elements.push(entity);
+      } else this.elements.push({ id: metadata!.id, type: "relation", label: decode(relation![4]!, true), from: relation![1], to: relation![3], classes: [], data: metadata!.data, rows: [], line: number, rowLines: [] });
+      metadata = undefined;
+    }
+    if (entity) throw new Error(`entity ${entity.id} needs a closing brace`);
+    if (metadata) throw new Error(`line ${metadata.number}: metadata must precede an entity or relationship`);
+  }
+  layer(e: Element): Layer { return (e.classes.find(name => has(c.LAYER_CLASSES, name)) as Layer | undefined) ?? "as-built"; }
+  ancestors(e: Element): Element[] {
+    const result: Element[] = [], seen = new Set([e.id]); let parent = e.parent;
+    while (parent && this.byId.has(parent) && !seen.has(parent)) { seen.add(parent); const ancestor = this.byId.get(parent)!; result.push(ancestor); parent = ancestor.parent; }
     return result;
   }
-  layer(cell: Cell): string | undefined { return this.ancestors(cell).find(a => (c.LAYERS as readonly string[]).includes(a.id))?.id; }
-  rows(cell: Cell): string[] { return styles(cell.cell).shape !== "table" ? [] : this.cells.filter(other => this.ancestors(other).includes(cell) && other.cell.attrs.value).map(other => other.cell.attrs.value!); }
-  box(cell: Cell): number[] {
-    const geometry = cell.cell.children.find(node => node.tag === "mxGeometry");
-    const values = ["x", "y", "width", "height"].map(key => Number(geometry?.attrs[key] ?? 0));
-    for (const a of this.ancestors(cell)) {
-      const g = a.cell.children.find(node => node.tag === "mxGeometry"); values[0]! += Number(g?.attrs.x ?? 0); values[1]! += Number(g?.attrs.y ?? 0);
-    }
-    return values;
-  }
+  legend(e: Element): boolean { return e.data.kind === "legend"; }
 }
+export const isEdge = (e: Element) => e.type === "edge" || e.type === "relation";
 export type Settings = { root: string; components: string[]; tracking: "none" | "local" | "mcp" };
 export function settings(): Settings {
   const config = JSON.parse(readFileSync(c.CONFIG_PATH, "utf8"));
-  if (config.diagrams?.mode !== "drawio" || !c.safeDiagramsRoot(config.diagrams.root) || !Array.isArray(config.diagrams.components)
-    || config.diagrams.components.some((p: unknown) => !c.safeRoot(p))) throw new Error("invalid drawio settings");
+  if (config.diagrams?.mode === c.REPLACED_MODE) throw new Error(c.REPLACED_MODE_MESSAGE);
+  if (config.diagrams?.mode !== c.MODE || !c.safeDiagramsRoot(config.diagrams.root) || !Array.isArray(config.diagrams.components)
+    || config.diagrams.components.some((p: unknown) => !c.safeRoot(p))) throw new Error("invalid mermaid settings");
   const tracking = config.tracking?.mode ?? "none";
   if (!Object.hasOwn(c.INTENT_PATTERNS, tracking)) throw new Error("invalid tracking mode");
   return { root: config.diagrams.root, components: config.diagrams.components, tracking };
@@ -142,7 +237,7 @@ export function decisions(): Set<string> {
 }
 export function validIntent(value: string | undefined, config: Settings): boolean { return c.INTENT_PATTERNS[config.tracking].test(value ?? ""); }
 export function diagramFile(file: string, config: Settings): string {
-  if (!c.safeDiagramsRoot(config.root)) throw new Error("invalid drawio settings");
+  if (!c.safeDiagramsRoot(config.root)) throw new Error("invalid mermaid settings");
   const home = realpathWithinRoot(".", config.root);
   if (!home) throw new Error(c.CHECK_REASONS[1]);
   const resolved = realpathWithinRoot(home, file);
@@ -185,96 +280,67 @@ export function frontmatter(text: string): Record<string, string[]> {
   throw new Error("unterminated frontmatter");
 }
 export function validate(file: string, config: Settings, mapped = decisions()): { failures: string[]; count: number } {
-  let d: Drawing;
+  let d: Diagram;
   const failures: string[] = [];
-  const fail = (number: number, id?: string, reason = c.CHECK_REASONS[number]) => failures.push(`${file}: check ${number}: ${reason}${id === undefined ? "" : `: ${id}`}`);
-  try { d = new Drawing(readDiagram(file, config)); } catch { fail(1); return { failures, count: 0 }; }
-  const pages = d.xml.children.filter(n => n.tag === "diagram");
-  if (d.xml.tag !== "mxfile" || d.xml.attrs.compressed !== "false" || pages.length !== 1 || pages[0]!.children.filter(n => n.tag === "mxGraphModel").length !== 1) fail(1);
-  const ids = d.cells.map(e => e.id), defaultCell = d.byId.get("1");
-  const prefix = ["0", ...(defaultCell ? ["1"] : []), ...c.LAYERS];
-  if (JSON.stringify(ids.slice(0, prefix.length)) !== JSON.stringify(prefix) || JSON.stringify(ids.filter(id => (c.LAYERS as readonly string[]).includes(id))) !== JSON.stringify(c.LAYERS)
-    || c.LAYERS.some(layer => d.byId.get(layer)?.cell.attrs.parent !== "0")
-    || (defaultCell && (defaultCell.wrapped || defaultCell.cell.attrs.parent !== "0" || ["vertex", "edge", "value"].some(k => defaultCell.cell.attrs[k])))
-    || d.cells.some(e => !prefix.includes(e.id) && (!d.layer(e) || d.ancestors(e).at(-1)?.id !== "0"))) fail(2);
-  const invalid = new Set(ids.filter((id, i) => ids.indexOf(id) !== i));
-  for (const e of d.cells) {
-    if (d.ancestors(e).some(a => styles(a.cell).shape === "table")) {
-      if (e.wrapped || e.cell.attrs.vertex !== "1" || e.cell.attrs.edge === "1" || !["tableRow", "partialRectangle"].includes(styles(e.cell).shape ?? "")) invalid.add(e.id);
-    } else if (d.elements.includes(e)) {
-      if (!c.ID_PATTERN.test(e.id) || !e.wrapped || "id" in e.cell.attrs || "value" in e.cell.attrs) { invalid.add(e.id); continue; }
-      if (e.legend) { if (!e.metadata.attrs.label) invalid.add(e.id); continue; }
-      const required = ["label", "component"];
-      if (["as-built", "retiring"].includes(d.layer(e) ?? "")) required.push("source");
-      if (["intended", "retiring"].includes(d.layer(e) ?? "")) required.push("decision", "intent");
-      if (required.some(k => !e.metadata.attrs[k]) || ![...config.components, "platform", "external"].includes(e.metadata.attrs.component ?? "")) invalid.add(e.id);
-    }
+  const fail = (number: number, id?: string) => failures.push(`${file}: check ${number}: ${c.CHECK_REASONS[number]}${id === undefined ? "" : `: ${id}`}`);
+  try { d = new Diagram(readDiagram(file, config)); } catch { fail(1); return { failures, count: 0 }; }
+  const flowchart = d.kind === "flowchart";
+  const classes = new Set<string>(d.unresolvedClassIds);
+  for (const e of d.elements) {
+    const layers = e.classes.filter(name => has(c.LAYER_CLASSES, name)), categories = e.classes.filter(name => has(c.CATEGORY_CLASSES, name)), kinds = e.classes.filter(name => has(c.EDGE_KIND_CLASSES, name));
+    if (e.classes.length !== layers.length + categories.length + kinds.length || layers.length > 1 || categories.length > 1 || kinds.length > 1
+      || (isEdge(e) ? categories.length : kinds.length)) classes.add(e.id);
+  }
+  for (const id of classes) fail(2, id);
+  const ids = d.elements.map(e => e.id), invalid = new Set(ids.filter((id, i) => ids.indexOf(id) !== i));
+  for (const e of d.elements) {
+    if (!c.mermaidId(e.id) || Object.keys(e.data).some(key => has(c.MERMAID_RESERVED_KEYS, key))
+      || ("kind" in e.data && e.data.kind !== "legend") || ("table" in e.data && (e.type !== "node" || e.data.table !== "true"))) { invalid.add(e.id); continue; }
+    const labelled = !isEdge(e);
+    if (d.legend(e)) { if (labelled && !e.label) invalid.add(e.id); continue; }
+    const required = ["component"], layer = d.layer(e);
+    if (layer !== "intended") required.push("source");
+    if (layer !== "as-built") required.push("decision", "intent");
+    if ((labelled && !e.label) || required.some(key => !e.data[key]) || ![...config.components, "platform", "external"].includes(e.data.component ?? "")) invalid.add(e.id);
   }
   for (const id of invalid) fail(3, id);
-  for (const node of d.malformed) fail(3, node.attrs.id ?? "<no id>", c.MALFORMED_OBJECT);
   for (const e of d.elements) {
-    const metadata = e.metadata.attrs, layer = d.layer(e) ?? "", style = styles(e.cell);
-    if (!e.legend) {
-      if ("source" in metadata) for (const token of metadata.source!.split(",")) {
+    const data = e.data, layer = d.layer(e);
+    if (!d.legend(e)) {
+      if ("source" in data) for (const token of data.source!.split(",")) {
         const source = token.trim().replace(/:L\d+$/, "");
         try {
           const suffix = relative(realpathSync("."), realpathSync(source));
           if (!source || isAbsolute(source) || source.split(/[\\/]/).includes("..") || suffix === ".." || suffix.startsWith(`..${sep}`) || isAbsolute(suffix) || !existsSync(source)) throw new Error();
         } catch { fail(4, e.id); break; }
       }
-      if ("decision" in metadata && !mapped.has(metadata.decision!)) fail(5, e.id);
-      if ("intent" in metadata && !validIntent(metadata.intent, config)) fail(6, e.id);
+      if ("decision" in data && !mapped.has(data.decision!)) fail(5, e.id);
+      if ("intent" in data && !validIntent(data.intent, config)) fail(6, e.id);
     }
-    if ((layer === "as-built" && "opacity" in style) || Object.entries(c.LAYER_STYLES[layer] ?? {}).some(([k, v]) => style[k] !== v)) fail(7, e.id);
-    if (e.cell.attrs.edge === "1" && ["source", "target"].some(k => {
-      const endpoint = d.byId.get(e.cell.attrs[k] ?? ""); return !endpoint || endpoint.cell.attrs.vertex !== "1" || !(c.ENDPOINT_LAYERS[layer] ?? []).includes(d.layer(endpoint) ?? "");
+    if (isEdge(e) && [e.from, e.to].some(id => {
+      const endpoint = d.byId.get(id ?? "");
+      return !endpoint || endpoint.type !== (flowchart ? "node" : "entity") || !(c.ENDPOINT_LAYERS[layer] ?? []).includes(d.layer(endpoint));
     })) fail(8, e.id);
   }
-  const vertices = d.elements.filter(e => e.cell.attrs.vertex === "1"), overlap = new Set<string>();
-  const finiteGeometry = vertices.every(vertex => d.box(vertex).every(Number.isFinite));
-  if (!finiteGeometry) fail(9);
-  for (const [i, a] of vertices.entries()) for (const b of vertices.slice(i + 1)) {
-    if (d.layer(a) !== d.layer(b) || d.ancestors(a).includes(b) || d.ancestors(b).includes(a)) continue;
-    const [x, y, w, h] = d.box(a) as [number, number, number, number], [bx, by, bw, bh] = d.box(b) as [number, number, number, number];
-    if (x < bx + bw && bx < x + w && y < by + bh && by < y + h) { overlap.add(a.id); overlap.add(b.id); }
-  }
-  for (const id of overlap) fail(9, id);
-  const width = Number(d.model.attrs.pageWidth ?? c.PAGE_WIDTH_LIMIT), height = Number(d.model.attrs.pageHeight ?? 0);
-  if (!Number.isFinite(width) || width > c.PAGE_WIDTH_LIMIT) fail(10);
-  if (!finiteGeometry || !Number.isFinite(height)) fail(10);
-  for (const e of finiteGeometry ? vertices : []) {
-    const [x, y, w, h] = d.box(e) as [number, number, number, number]; if (!(x >= 0 && y >= 0 && x + w <= width && y + h <= height)) fail(10, e.id);
-  }
-  for (const e of d.cells) {
-    const font = styles(e.cell).fontSize; if (font !== undefined && !(Number(font) >= c.FONT_SIZE_FLOOR)) fail(11, e.id);
-  }
-  if (basename(file) === "system.drawio" && config.components.some(component => !d.elements.some(e => !e.legend && ["as-built", "retiring"].includes(d.layer(e) ?? "") && e.metadata.attrs.component === component))) fail(12);
-  const legend = (e: Cell) => e.legend || d.ancestors(e).some(a => a.legend);
-  for (const e of d.cells) {
-    if (!(e.cell.attrs.edge === "1" || (e.wrapped && e.cell.attrs.vertex === "1"))) continue;
-    if ((!e.legend && d.ancestors(e).some(a => a.legend)) || (e.cell.attrs.edge === "1" && ["source", "target"].some(k => {
-      const endpoint = d.byId.get(e.cell.attrs[k] ?? ""); return endpoint && legend(endpoint) !== e.legend;
-    }))) fail(13, e.id);
+  if (flowchart && JSON.stringify(d.classDefs) !== JSON.stringify(c.CLASS_DEFS)) fail(7);
+  if (basename(file) === c.SYSTEM_FILE && config.components.some(component => !d.elements.some(e => !d.legend(e) && d.layer(e) !== "intended" && e.data.component === component))) fail(9);
+  const legend = (e: Element) => d.legend(e) || d.ancestors(e).some(a => d.legend(a));
+  for (const e of d.elements) {
+    if ((!d.legend(e) && d.ancestors(e).some(a => d.legend(a))) || (isEdge(e) && [e.from, e.to].some(id => {
+      const endpoint = d.byId.get(id ?? ""); return endpoint && legend(endpoint) !== d.legend(e);
+    }))) fail(10, e.id);
   }
   failures.sort((a, b) => Number(/: check (\d+):/.exec(a)![1]) - Number(/: check (\d+):/.exec(b)![1]));
   return { failures, count: d.elements.length };
 }
 export function diagramPaths(root: string): string[] {
   if (!realpathWithinRoot(".", root)) throw new Error(c.CHECK_REASONS[1]);
-  return [...new Bun.Glob("**/*.drawio").scanSync({ cwd: root, onlyFiles: false, followSymlinks: false })].map(file => `${root}/${file}`).sort();
+  return [...new Bun.Glob(`**/*${c.EXTENSION}`).scanSync({ cwd: root, onlyFiles: false, followSymlinks: false })].map(file => `${root}/${file}`).sort();
 }
 export function main(args = Bun.argv.slice(2)): number {
-  const config = settings(); let paths = args;
-  if (args[0] === "--normalize") {
-    if (args.length !== 2) throw new Error("usage: diagram-check [paths] | --normalize <file>");
-    const file = args[1]!;
-    try {
-      const destination = diagramFile(file, config), xml = parseXml(readFileSync(destination, "utf8"));
-      for (const page of xml.children.filter(n => n.tag === "diagram")) { page.children = [decodePage(page)]; page.text = ""; }
-      xml.attrs.compressed = "false"; writeFileSync(destination, serialize(xml) + "\n"); paths = [file];
-    } catch { console.log(`${file}: check 1: ${c.CHECK_REASONS[1]}`); return 1; }
-  } else if (args.some(arg => arg.startsWith("--"))) throw new Error("unknown diagram-check option");
-  if (!paths.length) paths = diagramPaths(config.root);
+  const config = settings();
+  if (args.some(arg => arg.startsWith("--"))) throw new Error("unknown diagram-check option");
+  const paths = args.length ? args : diagramPaths(config.root);
   const mapped = decisions(); let count = 0; const failures: string[] = [];
   for (const file of paths) { const result = validate(file, config, mapped); count += result.count; failures.push(...result.failures); }
   if (failures.length) { console.log(failures.join("\n")); return 1; }

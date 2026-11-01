@@ -3,40 +3,37 @@
 import { existsSync, readFileSync } from "node:fs";
 import { relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Drawing, decisions, diagramPaths, frontmatter, settings, styles, validIntent, readDiagram, serialize } from "./diagram-check.ts";
-import type { Cell, Settings } from "./diagram-check.ts";
+import { Diagram, decisions, diagramPaths, frontmatter, isEdge, settings, validIntent, readDiagram } from "./diagram-check.ts";
+import type { Element, Settings } from "./diagram-check.ts";
 import * as c from "./constants/diagrams.ts";
 function git(...args: string[]): string {
   const result = Bun.spawnSync(["git", ...args], { stdout: "pipe", stderr: "pipe", timeout: 30_000 });
   if (result.exitCode !== 0) throw new Error(result.stderr.toString().trim()); return result.stdout.toString();
 }
-export function project(d: Drawing): string[] {
+export function project(d: Diagram): string[] {
   const lines: string[] = [];
   for (const e of d.elements) {
-    const m = e.metadata.attrs, a = e.cell.attrs, label = (m.label ?? m.value ?? "").split(/\r?\n/).join(" ");
-    if (a.edge === "1") lines.push(`edge | ${d.layer(e) ?? ""} | ${e.id} | ${a.source ?? ""} → ${a.target ?? ""} | ${label}`);
+    const m = e.data, label = e.label.split("\n").join(" ");
+    if (isEdge(e)) lines.push(`edge | ${d.layer(e)} | ${e.id} | ${e.from ?? ""} → ${e.to ?? ""} | ${label}`);
     else {
-      let line = `${d.layer(e) ?? ""} | ${e.id} | ${label} | ${m.component ?? ""}`;
-      for (const key of ["source", "decision", "intent", "kind"]) if (e.wrapped && key in m) line += ` | ${key}=${m[key]}`;
-      lines.push(line, ...d.rows(e).map(row => `  row | ${row}`));
+      let line = `${d.layer(e)} | ${e.id} | ${label} | ${m.component ?? ""}`;
+      for (const key of ["source", "decision", "intent", "kind"]) if (key in m) line += ` | ${key}=${m[key]}`;
+      lines.push(line, ...e.rows.map(row => `  row | ${row}`));
     }
   }
   return lines;
 }
-function semantic(d: Drawing, e: Cell, transition?: c.Kind, before?: string, after?: string, addedSource = false): string {
-  const metadata = { ...e.metadata.attrs }, structural = { ...e.cell.attrs }, style = styles(e.cell);
-  delete structural.style;
-  for (const key of c.ROUTING_KEYS) delete style[key];
-  if (transition && (c.LAYERS as readonly string[]).includes(structural.parent ?? "")) delete structural.parent;
-  if (transition) for (const key of [...Object.keys(c.LAYER_STYLES[before ?? ""] ?? {}), ...Object.keys(c.LAYER_STYLES[after ?? ""] ?? {})]) delete style[key];
-  if (addedSource) delete metadata.source;
-  if (transition === "retires") { delete metadata.decision; delete metadata.intent; }
-  // Attribute/style ordering is XML syntax, not a semantic edit.
-  const sorted = (record: Record<string, string>) => Object.fromEntries(Object.entries(record).sort(([a], [b]) => a.localeCompare(b)));
-  return JSON.stringify([sorted(metadata), sorted(structural), sorted(style), d.rows(e)]);
+function semantic(e: Element, transition?: c.Kind, addedSource = false): string {
+  const data = { ...e.data };
+  if (addedSource) delete data.source;
+  if (transition === "retires") { delete data.decision; delete data.intent; }
+  // Pair and class statement order is syntax, not a semantic edit; layer classes are compared as transitions.
+  const sorted = Object.fromEntries(Object.entries(data).sort(([a], [b]) => a.localeCompare(b)));
+  const classes = e.classes.filter(name => !(c.LAYER_CLASSES as readonly string[]).includes(name)).sort();
+  return JSON.stringify([sorted, e.label, e.type, e.shape, e.from, e.to, e.parent, classes, e.rows]);
 }
-export type Change = { kind: c.Kind; reference: string; before?: Cell; after?: Cell; beforeLayer?: string; afterLayer?: string; rows: string[] };
-export type Report = { changes: Change[]; legends: string[]; failures: string[]; changedFiles: string[]; snapshots: Map<string, [Drawing | undefined, Drawing | undefined]>; head?: string };
+export type Change = { kind: c.Kind; reference: string; before?: Element; after?: Element; beforeLayer?: string; afterLayer?: string; rows: string[] };
+export type Report = { changes: Change[]; legends: string[]; failures: string[]; changedFiles: string[]; snapshots: Map<string, [Diagram | undefined, Diagram | undefined]>; head?: string };
 const transitions: Record<string, c.Kind> = { "→intended": "adds", "→as-built": "builds", "intended→as-built": "realizes", "as-built→retiring": "retires", "retiring→": "removes", "as-built→": "removes", "intended→": "withdraws" };
 function rowDiff(before: string[], after: string[]): string[] {
   // LCS keeps unchanged rows out of the report, including repeated table rows.
@@ -51,23 +48,24 @@ function rowDiff(before: string[], after: string[]): string[] {
   return lines;
 }
 export function delta(base: string, head: string | undefined, config: Settings, paths: string[] = []): Report {
-  const pathsAt = (revision: string | undefined) => new Set(revision === undefined ? diagramPaths(config.root) : git("ls-tree", "-rz", "--name-only", revision, "--", config.root).split("\0").filter(p => p.endsWith(".drawio")));
+  const pathsAt = (revision: string | undefined) => new Set(revision === undefined ? diagramPaths(config.root) : git("ls-tree", "-rz", "--name-only", revision, "--", config.root).split("\0").filter(p => p.endsWith(c.EXTENSION)));
   const oldPaths = pathsAt(base), newPaths = pathsAt(head);
   const report: Report = { changes: [], legends: [], failures: [], changedFiles: [], snapshots: new Map(), head };
   for (const path of [...new Set([...oldPaths, ...newPaths])].sort()) {
     if (paths.length && !paths.some(p => path === p || path.startsWith(p.replace(/\/+$/, "") + "/"))) continue;
     const oldText = oldPaths.has(path) ? git("show", `${base}:${path}`) : undefined;
     const newText = newPaths.has(path) ? (head === undefined ? readDiagram(path, config) : git("show", `${head}:${path}`)) : undefined;
-    const before = oldText === undefined ? undefined : new Drawing(oldText), after = newText === undefined ? undefined : new Drawing(newText);
+    const before = oldText === undefined ? undefined : new Diagram(oldText), after = newText === undefined ? undefined : new Diagram(newText);
     report.snapshots.set(path, [before, after]);
     if (oldText === newText) continue;
     const file = relative(config.root, path); report.changedFiles.push(file);
     const old = new Map(before?.elements.map(e => [e.id, e])), current = new Map(after?.elements.map(e => [e.id, e]));
     for (const id of [...new Set([...old.keys(), ...current.keys()])].sort()) {
       let a = old.get(id), b = current.get(id); const reference = `${file}#${id}`;
-      if (a?.legend || b?.legend) {
-        if (!a || !b || semantic(before!, a) !== semantic(after!, b)) report.legends.push(reference);
-        if (a?.legend) a = undefined; if (b?.legend) b = undefined;
+      const aLegend = !!a && before!.legend(a), bLegend = !!b && after!.legend(b);
+      if (aLegend || bLegend) {
+        if (!a || !b || semantic(a) !== semantic(b)) report.legends.push(reference);
+        if (aLegend) a = undefined; if (bLegend) b = undefined;
       }
       if (!a && !b) continue;
       const beforeLayer = a ? before!.layer(a) : undefined, afterLayer = b ? after!.layer(b) : undefined;
@@ -77,9 +75,9 @@ export function delta(base: string, head: string | undefined, config: Settings, 
         if (!transition) { report.failures.push(`${c.UNSUPPORTED}: ${reference}: ${beforeLayer} → ${afterLayer}`); continue; }
         report.changes.push({ kind: transition, reference, before: a, after: b, beforeLayer, afterLayer, rows: [] });
       }
-      const addedSource = !!(a && b && transition === "realizes" && !("source" in a.metadata.attrs) && "source" in b.metadata.attrs);
-      if (a && b && semantic(before!, a, transition, beforeLayer, afterLayer, addedSource) !== semantic(after!, b, transition, beforeLayer, afterLayer, addedSource)) report.changes.push({
-        kind: "changes", reference, before: a, after: b, beforeLayer, afterLayer, rows: rowDiff(before!.rows(a), after!.rows(b)),
+      const addedSource = !!(a && b && transition === "realizes" && !("source" in a.data) && "source" in b.data);
+      if (a && b && semantic(a, transition, addedSource) !== semantic(b, transition, addedSource)) report.changes.push({
+        kind: "changes", reference, before: a, after: b, beforeLayer, afterLayer, rows: rowDiff(a.rows, b.rows),
       });
     }
   }
@@ -134,14 +132,15 @@ export function compare(report: Report, text: string, config: Settings): string[
   }
   if (erd !== undefined && snapshotMatches) {
     // Optional adapter may not be installed. Its read-only CLI validates settings and sync first.
+    const { GENERATED } = require("./constants/erd.ts");
     const check = Bun.spawnSync([process.execPath, fileURLToPath(new URL("./erd-generate.ts", import.meta.url)), "--check"], { stdout: "pipe", stderr: "pipe" });
     if (check.exitCode !== 0) failures.push(`ERD sync check failed: ${check.stdout.toString().trim()} ${check.stderr.toString().trim()}`);
     else for (const [path, [before, after]] of report.snapshots) {
-      if (!path.startsWith(erd.output + "/") || !(after ?? before)?.xml.attrs.generator) continue;
+      if (!path.startsWith(erd.output + "/") || (after ?? before)?.generator !== GENERATED) continue;
       if (existsSync(path) !== !!after) continue;
       // Revision comparisons cannot borrow a passing check from a different worktree snapshot.
-      if (after && serialize(after.xml) !== serialize(new Drawing(readDiagram(path, config)).xml)) continue;
-      if ((after ?? before)!.xml.attrs.generator === "mosaic-prisma-erd") generated.add(relative(config.root, path));
+      if (after && after.text !== readDiagram(path, config)) continue;
+      generated.add(relative(config.root, path));
     }
   }
   const observed = Object.fromEntries(c.KINDS.map(k => [k, new Set<string>()])) as Record<c.Kind, Set<string>>;
@@ -151,7 +150,7 @@ export function compare(report: Report, text: string, config: Settings): string[
     const { kind, reference } = change; observed[kind].add(reference);
     if (!declared[kind].has(reference)) failures.push(`${c.UNDECLARED}: ${kind}: ${reference}`);
     let citation: Citation | undefined;
-    if (["adds", "builds", "retires"].includes(kind)) citation = change.after?.metadata.attrs;
+    if (["adds", "builds", "retires"].includes(kind)) citation = change.after?.data;
     else if ((kind === "removes" && change.beforeLayer === "as-built") || kind === "withdraws" || (kind === "changes" && change.beforeLayer === "intended")) citation = declared[kind].get(reference) ?? {};
     if (citation && (!mapped.has(citation.decision ?? "") || !validIntent(citation.intent, config))) failures.push(`${c.BAD_CITATION}: ${kind}: ${reference}`);
   }
@@ -164,7 +163,7 @@ export function candidates(report: Report, text: string, config: Settings) {
   const changed = new Set([...report.changes.map(change => change.reference.split("#")[0]), ...report.legends.map(ref => ref.split("#")[0]), ...report.failures.map(f => f.split(": ")[1]!.split("#")[0])]);
   const entries: { doc: string; class: string; why: string }[] = [];
   for (const [path, snapshots] of report.snapshots) {
-    const file = relative(config.root, path), affinity = snapshots.some(d => d?.elements.some(e => components.includes(e.metadata.attrs.component ?? "")));
+    const file = relative(config.root, path), affinity = snapshots.some(d => d?.elements.some(e => components.includes(e.data.component ?? "")));
     if (changed.has(file) || affinity) entries.push({ doc: path, class: "diagram", why: changed.has(file) ? "diagram delta" : "plan component affinity" });
   }
   return { candidates: entries, cannotEvaluate: [] };
@@ -173,7 +172,7 @@ export function main(args = Bun.argv.slice(2)): number {
   const command = args.shift();
   if (command === "project") {
     if (args.length !== 1) throw new Error("usage: diagram-delta project <file>");
-    console.log(project(new Drawing(readDiagram(args[0]!, settings()))).join("\n")); return 0;
+    console.log(project(new Diagram(readDiagram(args[0]!, settings()))).join("\n")); return 0;
   }
   if (command !== "delta" && command !== "compare") throw new Error("usage: diagram-delta project|delta|compare");
   const plan = command === "compare" ? args.shift() : undefined;

@@ -295,8 +295,8 @@ It resolves the folder's owning repo from its nearest existing ancestor and chec
 `git check-ignore -q <dir>/` there (owner-relative path; cannot-evaluate without git).
 ### Optional architecture diagrams
 
-Manifest `diagrams: { "mode": "none" | "drawio", "root"?: "repo-relative-directory" }`
-defaults to `none`. Enable drawio only by owner opt-in; the default root is
+Manifest `diagrams: { "mode": "none" | "mermaid", "root"?: "repo-relative-directory" }`
+defaults to `none`. Enable mermaid only by owner opt-in; the default root is
 `docs/architecture/diagrams`. Absolute roots, traversal, backslashes, whitespace and
 empty segments are rejected, as are `.git` segments, harness/tool namespaces, `docs/tracker`
 and `docs/standards` subtrees, reserved documentation homes and colliding kit destinations.
@@ -304,24 +304,23 @@ Every destination ancestor is checked against both planned entries and the files
 a planned file or symlink cannot become a directory. Reserved names and planned destinations use
 one NFC-normalized, case-insensitive identity policy on every filesystem; ambiguous aliases are
 rejected rather than guessing filesystem sensitivity. The selected root receives the project-owned contract starter;
-the kit installs a diagram rule, skill/keeper twins and Bun validation/delta tools.
+the kit installs a diagram rule, skill/keeper twins and Bun validation/delta/review tools.
+Diagrams are plain-text Mermaid `.mmd` files (a flowchart subset with `id@{ … }` data blocks) edited directly;
+Orca's `.mmd` viewer and the Mermaid Live Editor render them, and doctor fails any `.drawio` left under the root.
+A saved manifest with `mode: "drawio"` is rejected; upgrade with the mosaic checkout's `install/drawio-to-mermaid.md`.
 Runtime metadata records the selected root and manifest member/component bindings.
 With no tracker, an approved `plan:NNNN` is intent; other modes use `tracker://<key>`.
 The core has no schema generator or generated-folder comparison exemption.
 
 The project owns `.mcp.json`; the mechanical helper never writes it, even with `--force`.
-The owner merges `{"mcpServers":{"drawio":{"command":"npx","args":["-y","<package>"]}}}`
-without replacing other servers, taking `<package>` from `DRAWIO_PACKAGE` in
-`tools/constants/diagrams.ts` (the only pin). Doctor **FAILs** missing/mismatched mounts;
-configuration is not proof of a running server. The diagrams skill checks mounted tools
-before any write. Offline validation/deltas need no MCP.
-DIAGRAMS_DRAWIO blocks select opt-in text after tracking/landing/close-out and before
-topology/values; DIAGRAMS_ROOT and DRAWIO_PACKAGE expand selected values.
-Without the bundle, no diagram files, tools, MCP requirement or caller hooks are installed.
+No MCP server is involved; validation, deltas and review comments run offline.
+DIAGRAMS_MERMAID blocks select opt-in text after tracking/landing/close-out and before
+topology/values; DIAGRAMS_ROOT expands the selected root.
+Without the bundle, no diagram files, tools or caller hooks are installed.
 
 #### Optional Prisma ERDs
 
-With drawio selected, optionally set `diagrams.erd` to
+With mermaid selected, optionally set `diagrams.erd` to
 `{ "adapter": "prisma", "schemaGlobs": ["schema/**/*.prisma"], "output": "docs/architecture/diagrams/erd", "component": "platform", "label": "Schema" }`.
 These are illustrative values: derive globs, component and label from the project and obtain owner opt-in.
 Absence installs no adapter files, schema commands or generated-folder exemption.
@@ -338,10 +337,10 @@ Run `bun tools/erd-generate.ts`, then `bun tools/erd-generate.ts --check` and
 `--check` is read-only and names missing/changed/unexpected files; `--file <schema>` takes a
 repo-relative input or unambiguous suffix and isolates its output, while resolving cross-file references.
 Generation preflights all inputs before writes, refuses hand-authored destination collisions, and
-cleans only orphans with the `.erd.drawio` suffix **and** the adapter marker.
-Generated output is explicitly marked, never keeper-edited. Only enabled, fully synchronized output
+cleans only orphans with the `.erd.mmd` suffix **and** the adapter marker.
+Generated output is Mermaid `erDiagram` text whose first line is the `%% generated: mosaic-prisma-erd …` marker, never keeper-edited. Only enabled, fully synchronized output
 matching the compared snapshot is exempt from declarations; no unconditional folder exemption exists.
-DIAGRAMS_ERD slash-closed own-line/inline blocks select adapter-only Markdown after DIAGRAMS_DRAWIO;
+DIAGRAMS_ERD slash-closed own-line/inline blocks select adapter-only Markdown after DIAGRAMS_MERMAID;
 doctor loads the adapter contract only from its own contained sibling constants when enabled.
 
 PR evidence requires `landing: { mode: "pull-request", host: "github" }`. Ask whether the project

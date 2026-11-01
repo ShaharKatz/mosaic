@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { install } from "../../kit/install.ts";
-import { BUNDLE_FILES, DIAGRAMS_ROOT, DRAWIO_MOUNT } from "../../kit/tools/constants/diagrams.ts";
+import { BUNDLE_FILES, DIAGRAMS_ROOT, REPLACED_MODE_MESSAGE } from "../../kit/tools/constants/diagrams.ts";
 import { BUNDLE_FILES as ERD_FILES } from "../../kit/tools/constants/erd.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "mosaic-tooling-"));
@@ -1114,9 +1114,8 @@ try {
 	for (const probe of [
 		{ name: "r2_standards_and_diagrams", run: async () => {
 			const destination = join(scratch, "standards-with-diagrams");
-			writeFileSync(manifest, JSON.stringify({ ...input, standards: [{ name: "testing", paths: ["apps/api/**/*.ts"] }], diagrams: { mode: "drawio", root: "architecture/views" } }));
+			writeFileSync(manifest, JSON.stringify({ ...input, standards: [{ name: "testing", paths: ["apps/api/**/*.ts"] }], diagrams: { mode: "mermaid", root: "architecture/views" } }));
 			await install({ manifest, target: destination }); mkdirSync(join(destination, "apps/api"), { recursive: true });
-			writeFileSync(join(destination, ".mcp.json"), JSON.stringify({ mcpServers: { drawio: DRAWIO_MOUNT } }));
 			writeFileSync(join(destination, "apps/api/example.ts"), "export const value = 1;\n");
 			const result = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: destination, stdout: "pipe", stderr: "pipe" });
 			strictEqual(result.exitCode, 0, `${result.stdout}\n${result.stderr}`); strictEqual(result.stdout.toString(), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
@@ -1138,14 +1137,13 @@ try {
 			if (alias) symlinkSync(outside, join(overlay, alias));
 			const inventory = (directory: string) => [...new Bun.Glob("**/*").scanSync({ cwd: directory, dot: true, onlyFiles: false })].sort().map(file => [file, lstatSync(join(directory, file)).isDirectory() ? "directory" : readFileSync(join(directory, file), "utf8")]);
 			const targetBefore = inventory(destination), outsideBefore = inventory(outside);
-			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "drawio", root } }));
+			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "mermaid", root } }));
 			await rejects(install({ manifest, target: destination, overlay, force: true }));
 			deepStrictEqual(inventory(destination), targetBefore); deepStrictEqual(inventory(outside), outsideBefore);
 		} })),
 		{ name: "r3_doctor_reserved_aliases", run: async () => {
 			const destination = join(scratch, "r3-doctor-aliases");
-			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "drawio" } })); await install({ manifest, target: destination });
-			writeFileSync(join(destination, ".mcp.json"), JSON.stringify({ mcpServers: { drawio: DRAWIO_MOUNT } }));
+			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "mermaid" } })); await install({ manifest, target: destination });
 			const configFile = join(destination, ".omp/mosaic.json"), metadata = JSON.parse(readFileSync(configFile, "utf8"));
 			for (const root of [".GIT/diagrams", "DOCS/Architecture", "TOOLS/views", ".OmP/views", "DOCS/Tracker/views", "DOCS/Standards/views"]) {
 				metadata.diagrams.root = root; const bytes = JSON.stringify(metadata); writeFileSync(configFile, bytes);
@@ -1157,20 +1155,19 @@ try {
 		{ name: "r2_planned_symlink_ancestor", run: async () => {
 			const overlay = join(scratch, "planned-link-overlay"), outside = join(scratch, "planned-outside"), destination = join(scratch, "planned-link-target");
 			mkdirSync(overlay); mkdirSync(outside); symlinkSync(outside, join(overlay, "assets"));
-			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "drawio", root: "assets/views" } }));
+			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "mermaid", root: "assets/views" } }));
 			await rejects(install({ manifest, target: destination, overlay, force: true }), /planned destination ancestor/);
 			ok(!existsSync(destination), "preflight creates no target"); ok(!existsSync(join(outside, "views")), "outside remains unchanged");
 		} },
 		{ name: "r2_planned_file_ancestor", run: async () => {
 			const destination = join(scratch, "planned-file-target");
-			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "drawio", root: "docs/architecture/README.md/views" } }));
+			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "mermaid", root: "docs/architecture/README.md/views" } }));
 			await rejects(install({ manifest, target: destination, force: true }), /planned destination ancestor/);
 			ok(!existsSync(destination), "preflight creates no partial target");
 		} },
 		{ name: "r2_trusted_doctor", run: async () => {
 			const destination = join(scratch, "doctor-inspected"), marker = join(scratch, "doctor-executed"), external = join(scratch, "external-contract.ts");
-			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "drawio" } })); await install({ manifest, target: destination });
-			writeFileSync(join(destination, ".mcp.json"), JSON.stringify({ mcpServers: { drawio: DRAWIO_MOUNT } }));
+			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "mermaid" } })); await install({ manifest, target: destination });
 			const ownConstants = new URL("../../kit/tools/constants/diagrams.ts", import.meta.url).pathname;
 			writeFileSync(external, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "executed"); export * from ${JSON.stringify(ownConstants)};`);
 			rmSync(join(destination, "tools/constants/diagrams.ts")); symlinkSync(external, join(destination, "tools/constants/diagrams.ts"));
@@ -1187,23 +1184,23 @@ try {
 			ok(!existsSync(join(off, "tools/constants/diagrams.ts")));
 			const offCheck = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: off, stdout: "pipe", stderr: "pipe" });
 			strictEqual(offCheck.exitCode, 0, `${offCheck.stdout}\n${offCheck.stderr}`); strictEqual(offCheck.stdout.toString(), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
-			const metadata = JSON.parse(readFileSync(join(off, ".omp/mosaic.json"), "utf8")); metadata.diagrams = { mode: "drawio", root: DIAGRAMS_ROOT, components: [] };
+			const metadata = JSON.parse(readFileSync(join(off, ".omp/mosaic.json"), "utf8")); metadata.diagrams = { mode: "mermaid", root: DIAGRAMS_ROOT, components: [] };
 			writeFileSync(join(off, ".omp/mosaic.json"), JSON.stringify(metadata));
 			const switched = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: off, stdout: "pipe", stderr: "pipe" });
 			strictEqual(switched.exitCode, 1, `${switched.stdout}\n${switched.stderr}`); ok(switched.stdout.toString().includes("diagrams bundle constants unavailable next to doctor"));
 		} },
 		{ name: "r2_supported_install_roots", run: async () => {
 			for (const tracking of [{ mode: "none" }, { mode: "local" }, { mode: "mcp", mcp: { server: "issues" } }]) for (const root of [".git/diagrams", "nested/.git/diagrams", "docs/tracker/diagrams", "docs/standards/diagrams"]) {
-				writeFileSync(manifest, JSON.stringify({ ...input, tracking, diagrams: { mode: "drawio", root } }));
+				writeFileSync(manifest, JSON.stringify({ ...input, tracking, diagrams: { mode: "mermaid", root } }));
 				const destination = join(scratch, "filtered-root");
 				await rejects(install({ manifest, target: destination })); ok(!existsSync(destination));
 			}
 		} },
 		{ name: "r1_root_collision", run: async () => {
-			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "drawio", root: "docs/architecture" } }));
+			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "mermaid", root: "docs/architecture" } }));
 			await rejects(install({ manifest, target: join(scratch, "collision") }), /diagrams.root collides with kit file/);
 			for (const root of ["docs", "docs/plans", "docs/process", ".omp/views", ".claude/views", "tools/views"]) {
-				writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "drawio", root } }));
+				writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "mermaid", root } }));
 				await rejects(install({ manifest, target: join(scratch, "reserved") }));
 			}
 		} },
@@ -1221,13 +1218,13 @@ try {
 			const nested = join(scratch, "nested-mcp-overlay"); mkdirSync(join(nested, ".mcp.json"), { recursive: true }); writeFileSync(join(nested, ".mcp.json/server"), "forbidden");
 			await rejects(install({ manifest, target: join(scratch, "nested-mcp"), overlay: nested, force: true }), /project-owned.*mcp/);
 			ok(!existsSync(join(scratch, "nested-mcp")));
-			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "drawio", root: ".mcp.json" } }));
+			writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "mermaid", root: ".mcp.json" } }));
 			await rejects(install({ manifest, target: join(scratch, "relocated-mcp"), force: true }), /project-owned.*mcp/);
 			ok(!existsSync(join(scratch, "relocated-mcp")));
 		} },
 		{ name: "r1_component_binding", run: async () => {
 			for (const path of ["apps/with space", "apps/{template}"]) {
-				writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "drawio" }, components: [{ ...input.components[0], path }] }));
+				writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "mermaid" }, components: [{ ...input.components[0], path }] }));
 				await rejects(install({ manifest, target: join(scratch, "binding") }), /binding/);
 			}
 		} },
@@ -1258,11 +1255,10 @@ try {
 	const erd = { adapter: "prisma", schemaGlobs: ["schema/**/*.prisma"], output: `${DIAGRAMS_ROOT}/erd`, component: "platform", label: "Schema" };
 	for (const topology of ["monorepo", "multi-repo"]) for (const landing of [{ mode: "direct" }, { mode: "pull-request", host: "github" }]) {
 		const fresh = join(scratch, `erd-${topology}-${landing.mode}`);
-		writeFileSync(manifest, JSON.stringify({ ...input, topology, landing, diagrams: { mode: "drawio", erd },
+		writeFileSync(manifest, JSON.stringify({ ...input, topology, landing, diagrams: { mode: "mermaid", erd },
 			remotes: { ...input.remotes, members: { api: "https://example.invalid/api.git" } },
 			members: topology === "multi-repo" ? [{ ...input.components[0], name: "api" }] : [] }));
 		await install({ manifest, target: fresh });
-		writeFileSync(join(fresh, ".mcp.json"), JSON.stringify({ mcpServers: { drawio: DRAWIO_MOUNT } }));
 		for (const file of ERD_FILES) ok(existsSync(join(fresh, file)));
 		const doctor = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: fresh, stdout: "pipe", stderr: "pipe" });
 		strictEqual(doctor.exitCode, 0, `${doctor.stdout}\n${doctor.stderr}`);
@@ -1291,10 +1287,10 @@ try {
 		}
 		console.log(`PASS Prisma ERD ${topology}/${landing.mode}: doctor 0/0/0; invalid settings fail closed`);
 	}
-	for (const diagrams of [{ mode: "none", erd }, { mode: "drawio", erd: { ...erd, output: "sibling/erd" } },
-		{ mode: "drawio", erd: { ...erd, output: `${DIAGRAMS_ROOT}/README.md` } },
-		{ mode: "drawio", erd: { ...erd, output: `${DIAGRAMS_ROOT}/.GIT/erd` } },
-		{ mode: "drawio", erd: { ...erd, schemaGlobs: [] } }]) {
+	for (const diagrams of [{ mode: "none", erd }, { mode: "mermaid", erd: { ...erd, output: "sibling/erd" } },
+		{ mode: "mermaid", erd: { ...erd, output: `${DIAGRAMS_ROOT}/README.md` } },
+		{ mode: "mermaid", erd: { ...erd, output: `${DIAGRAMS_ROOT}/.GIT/erd` } },
+		{ mode: "mermaid", erd: { ...erd, schemaGlobs: [] } }]) {
 		const fresh = join(scratch, "invalid-erd"); writeFileSync(manifest, JSON.stringify({ ...input, diagrams }));
 		await rejects(install({ manifest, target: fresh })); ok(!existsSync(fresh), "invalid adapter causes no writes");
 	}
@@ -1305,11 +1301,11 @@ try {
 				const drawTarget = join(scratch, `draw-${tracking.mode}-${topology}-${landing.mode}`);
 				const custom = tracking.mode === "none" && topology === "monorepo";
 				const root = custom ? "architecture/views" : DIAGRAMS_ROOT;
-				writeFileSync(manifest, JSON.stringify({ ...input, tracking, topology, landing, diagrams: { mode: "drawio", root },
+				writeFileSync(manifest, JSON.stringify({ ...input, tracking, topology, landing, diagrams: { mode: "mermaid", root },
 					remotes: { ...input.remotes, members: { api: "https://example.invalid/api.git" } },
 					members: topology === "multi-repo" ? [{ ...input.components[0], name: "api" }] : [] }));
 				mkdirSync(drawTarget);
-				const mcp = JSON.stringify({ mcpServers: { unrelated: { command: "existing", args: ["unchanged"] }, drawio: DRAWIO_MOUNT }, projectSetting: true });
+				const mcp = JSON.stringify({ mcpServers: { unrelated: { command: "existing", args: ["unchanged"] } }, projectSetting: true });
 				writeFileSync(join(drawTarget, ".mcp.json"), mcp);
 				await install({ manifest, target: drawTarget });
 				strictEqual(readFileSync(join(drawTarget, ".mcp.json"), "utf8"), mcp, "MCP bytes untouched");
@@ -1317,27 +1313,28 @@ try {
 				ok(!existsSync(join(drawTarget, "tools/erd-generate.ts")), "no adapter");
 				if (custom) ok(!existsSync(join(drawTarget, DIAGRAMS_ROOT)), "custom root moves starter");
 				const runtime = JSON.parse(readFileSync(join(drawTarget, ".omp/mosaic.json"), "utf8"));
-				deepStrictEqual(runtime.diagrams, { mode: "drawio", root, components: topology === "monorepo" ? input.components.map((entry: { path: string }) => entry.path) : [input.components[0].path] });
+				deepStrictEqual(runtime.diagrams, { mode: "mermaid", root, components: topology === "monorepo" ? input.components.map((entry: { path: string }) => entry.path) : [input.components[0].path] });
 				const drawRun = (command: string[], code: number) => {
 					const result = Bun.spawnSync(command, { cwd: drawTarget, stdout: "pipe", stderr: "pipe" });
 					strictEqual(result.exitCode, code, `${command.join(" ")}\n${result.stdout}\n${result.stderr}`); return result.stdout.toString();
 				};
 				ok(drawRun([bun, "tools/doctor.ts"], 0).includes("doctor: 0 fail, 0 warn, 0 cannot-evaluate"));
 				if (tracking.mode === "local" && topology === "monorepo" && landing.mode === "direct") {
-					const key = drawRun([bun, "tools/tracker.ts", "--provider", "replay", "intent", "--title", "Diagram", "--repos", "link-repo", "--areas", "diagram:system.drawio#api", "--writer", "w-1234abcd"], 0).trim();
-					const exact = drawRun([bun, "tools/tracker.ts", "--provider", "replay", "intersect", "--areas", "diagram:system.drawio#api"], 0);
+					const key = drawRun([bun, "tools/tracker.ts", "--provider", "replay", "intent", "--title", "Diagram", "--repos", "link-repo", "--areas", "diagram:system.mmd#api", "--writer", "w-1234abcd"], 0).trim();
+					const exact = drawRun([bun, "tools/tracker.ts", "--provider", "replay", "intersect", "--areas", "diagram:system.mmd#api"], 0);
 					ok(exact.includes(key));
-					const other = drawRun([bun, "tools/tracker.ts", "--provider", "replay", "intersect", "--areas", "diagram:system.drawio#*"], 0);
+					const other = drawRun([bun, "tools/tracker.ts", "--provider", "replay", "intersect", "--areas", "diagram:system.mmd#*"], 0);
 					ok(!other.includes(key), "diagram areas never glob match");
 				}
 				if (custom && landing.mode === "direct") {
-					rmSync(join(drawTarget, ".mcp.json"));
-					ok(drawRun([bun, "tools/doctor.ts"], 1).includes("FAIL diagrams .mcp.json"));
-					writeFileSync(join(drawTarget, ".mcp.json"), JSON.stringify({ mcpServers: { drawio: { command: "wrong" } } }));
-					ok(drawRun([bun, "tools/doctor.ts"], 1).includes("FAIL diagrams .mcp.json"));
-					writeFileSync(join(drawTarget, ".mcp.json"), mcp);
-					for (const diagrams of [{ mode: "other" }, { mode: "drawio", root: "../outside", components: [] }, { mode: "drawio", root, components: ["/outside"] },
-						...["docs", "docs/architecture", "docs/plans", "docs/process", ".omp/views", ".claude/views", "tools/views"].map(root => ({ mode: "drawio", root, components: runtime.diagrams.components }))]) {
+					writeFileSync(join(drawTarget, root, "system.drawio"), "<mxfile/>");
+					ok(drawRun([bun, "tools/doctor.ts"], 1).includes(`FAIL diagrams ${root}/system.drawio: draw.io file left after the Mermaid migration`));
+					rmSync(join(drawTarget, root, "system.drawio"));
+					writeFileSync(join(drawTarget, ".omp/mosaic.json"), JSON.stringify({ ...runtime, diagrams: { ...runtime.diagrams, mode: "drawio" } }));
+					const replaced = drawRun([bun, "tools/doctor.ts"], 1);
+					ok(replaced.includes("FAIL mosaic-config") && replaced.includes(REPLACED_MODE_MESSAGE), replaced);
+					for (const diagrams of [{ mode: "other" }, { mode: "mermaid", root: "../outside", components: [] }, { mode: "mermaid", root, components: ["/outside"] },
+						...["docs", "docs/architecture", "docs/plans", "docs/process", ".omp/views", ".claude/views", "tools/views"].map(root => ({ mode: "mermaid", root, components: runtime.diagrams.components }))]) {
 						writeFileSync(join(drawTarget, ".omp/mosaic.json"), JSON.stringify({ ...runtime, diagrams }));
 						ok(drawRun([bun, "tools/doctor.ts"], 1).includes("FAIL mosaic-config"));
 					}
@@ -1354,14 +1351,18 @@ try {
 					rmSync(join(drawTarget, "tools/diagram-delta.ts"));
 					ok(drawRun([bun, "tools/doctor.ts"], 1).includes("required bundle file missing"));
 				}
-				console.log(`PASS drawio: ${tracking.mode}/${topology}/${landing.mode}; project MCP unchanged, bundle present, doctor 0/0/0; negative probes where selected`);
+				console.log(`PASS mermaid: ${tracking.mode}/${topology}/${landing.mode}; project MCP unchanged, bundle present, doctor 0/0/0; negative probes where selected`);
 			}
 		}
 	}
-	for (const diagrams of [{ mode: "bad" }, { mode: "none", root: "views" }, { mode: "drawio", root: "../escape" }, { mode: "drawio", root: "/absolute" }]) {
+	for (const diagrams of [{ mode: "bad" }, { mode: "none", root: "views" }, { mode: "mermaid", root: "../escape" }, { mode: "mermaid", root: "/absolute" }]) {
 		writeFileSync(manifest, JSON.stringify({ ...input, diagrams }));
 		await rejects(install({ manifest, target: join(scratch, "invalid-diagrams") }));
 	}
+	writeFileSync(manifest, JSON.stringify({ ...input, diagrams: { mode: "drawio" } }));
+	await rejects(install({ manifest, target: join(scratch, "replaced-diagrams") }), (error: Error) => error.message === REPLACED_MODE_MESSAGE);
+	ok(!existsSync(join(scratch, "replaced-diagrams")), "replaced drawio mode writes nothing");
+	console.log("PASS replaced drawio mode: manifest rejected with the upgrade message, no writes");
 	for (const topology of ["monorepo", "multi-repo"]) {
 		for (const selection of ["pull-request+standards", "direct+standards", "direct+none"]) {
 			const fresh = join(scratch, `integration-${topology}-${selection}`);
@@ -1672,7 +1673,7 @@ try {
 	rmSync(join(target, "without-markdown.ts"));
 	console.log("PASS doctor Markdown: unavailable parser reports one cannot-evaluate");
 
-	for (const file of ["view.tsx", "Makefile", ".github/workflows/check.yml", "docs/diagram.drawio", ".claude/assets/font.ttf", "image.png"]) {
+	for (const file of ["view.tsx", "Makefile", ".github/workflows/check.yml", "docs/diagram.mmd", ".claude/assets/font.ttf", "image.png"]) {
 		put(file, file.endsWith(".png") || file.endsWith(".ttf") ? new Uint8Array([0, 255, 123, 123]) : "{{project syntax}}\n");
 	}
 	put(".claude/worktrees/other/.git", "gitdir: /not-this-repository\n");
