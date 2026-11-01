@@ -162,6 +162,55 @@ try {
     equal(read("docs/plans/archived/0000-old.md"), plan(""));
     equal(read("docs/plans/0002-crlf.md"), crlf(".mmd"));
   });
+  test("live_docs_repoint_only_migrated_destinations", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    const erd = diagram(); erd.attrs.generator = "mosaic-prisma-erd";
+    save(erd, `${root}/erd/schema.erd.drawio`);
+    put("docs/archived/fixture.drawio", serialize(d));
+    const doc = "docs/architecture/nested/overview.md";
+    const before = [
+      "[system](../diagrams/fixture.drawio)",
+      "![detail](../diagrams/./fixture.drawio#api)",
+      `Repo path: \`${fixture}\`.`,
+      "[schema](../diagrams/erd/schema.erd.drawio)",
+      "[history](../../archived/fixture.drawio)",
+      "[unconverted](../diagrams/absent.drawio)",
+      "[remote](https://example.invalid/diagrams/fixture.drawio)",
+    ].join("\n");
+    const after = before.replace("../diagrams/fixture.drawio)", "../diagrams/fixture.mmd)")
+      .replace("../diagrams/./fixture.drawio#api", "../diagrams/./fixture.mmd#api")
+      .replace(`\`${fixture}\``, `\`${output}\``)
+      .replace("schema.erd.drawio)", "schema.erd.mmd)");
+    put(doc, before);
+    const frozen = [
+      "docs/architecture/nested/archived/overview.md",
+      "docs/plans/evidence/overview.md",
+      "docs/architecture/source/overview.md",
+      "docs/architecture/gaps-archive.md",
+      "docs/architecture/decisions-archive.md",
+    ];
+    for (const file of frozen) put(file, `Frozen: \`${fixture}\`.`);
+    const { out } = run(["--root", root, "--plans", "docs/plans", "--docs", "docs"], 0);
+    equal(read(doc), after);
+    ok(out.includes(`rewrote doc references: ${doc}`), out);
+    for (const file of frozen) equal(read(file), `Frozen: \`${fixture}\`.`);
+    equal(read("docs/archived/fixture.drawio"), serialize(d));
+  });
+  test("docs_unchanged_without_option", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    const text = `[system](diagrams/fixture.drawio#api)\n\`${fixture}\`\n`;
+    put("docs/architecture/overview.md", text);
+    run(["--root", root], 0);
+    equal(read("docs/architecture/overview.md"), text);
+  });
+  test("docs_unchanged_on_exit_1", () => {
+    const d = diagram(); element(d, "end"); save(d);
+    const text = `[system](diagrams/fixture.drawio)\n\`${fixture}\`\n`;
+    put("docs/architecture/overview.md", text);
+    run(["--root", root, "--docs", "docs/architecture"], 1);
+    equal(read("docs/architecture/overview.md"), text);
+    ok(exists(fixture) && !exists(output));
+  });
   test("findings_exit_2", () => {
     const d = diagram(); element(d, "api", "as-built", { metadata: { source: "missing/file.ts" } }); save(d);
     const { out } = run(["--root", root], 2);

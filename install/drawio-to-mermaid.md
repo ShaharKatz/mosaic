@@ -21,13 +21,14 @@ Copy the saved manifest to the working input and set `diagrams.mode: "mermaid"`.
 ## 4. Convert
 
 ```sh
-bun <mosaic>/install/drawio-to-mermaid.ts --root <root> [--plans docs/plans]
+bun <mosaic>/install/drawio-to-mermaid.ts --root <root> [--plans docs/plans] [--docs docs]
 ```
 
-- `<root>` covers generated ERDs too: `diagrams.erd.output` always lies inside it. Pass `--plans docs/plans` whenever the project has plans.
+- `<root>` covers generated ERDs too: `diagrams.erd.output` always lies inside it. Pass `--plans docs/plans` whenever the project has plans, and `--docs docs` whenever it has live docs. `--docs` accepts one safe repository-relative directory.
 - Each hand-authored `.drawio` becomes the sibling `.mmd`: ids, labels (`<br/>` line breaks, `#quot;` quotes), layers as classes, `<object>` attributes as data pairs, containers as subgraphs, tables as `table: "true"` nodes, shapes, categories from the old palette, and edge kinds from dash style.
 - Generated ERDs (`mxfile generator="mosaic-prisma-erd"`) are deleted, not converted; step 6 regenerates them.
 - With `--plans`, `.drawio` becomes `.mmd` in `diagram:<path>#<id>` areas and in `## Architecture delta` references and `- diagrams:` lists of plans outside `docs/plans/archived/`. Archived plans, landing receipts and frozen migration records stay as they are.
+- With `--docs`, Markdown links/images (including anchors) and backticked repository-relative paths under that directory are repointed only when their resolved destination was converted or was a deleted generated ERD. Link destinations resolve relative to their Markdown file; code spans resolve from the repository root. Generated ERD references become `<stem>.erd.mmd`, ready for step 6. Each changed file is reported. Both rewrites skip directories named `archived`, `<plans>/evidence/`, `docs/architecture/source/`, `gaps-archive.md` and `decisions-archive.md`; unrelated `.drawio` destinations stay unchanged. Without `--docs`, live-doc references are not rewritten.
 - `.drawio` sources are deleted after a successful write; `--keep` retains them for inspection, but remove them before landing (doctor fails on `*.drawio` under the root).
 
 Exit codes:

@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 // One-time draw.io → Mermaid converter for /mosaic-kit upgrades (source-side only; never installed).
 // Run from the installed project root:
-//   bun <mosaic>/install/drawio-to-mermaid.ts --root <diagrams root> [--plans <dir>] [--keep]
+//   bun <mosaic>/install/drawio-to-mermaid.ts --root <diagrams root> [--plans <dir>] [--docs <dir>] [--keep]
 // Generated ERDs always live inside the diagrams root, so --root covers them.
 // Exit 0: converted and clean; 1: nothing written (usage, parse, misread-id or equivalence-gate failure);
 // 2: converted, but diagram-check findings remain.
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { inflateRawSync } from "node:zlib";
+import { basename, dirname, resolve } from "node:path";
 import { Diagram, decisions, encodeLabel, serializeData, settings, validate } from "../kit/tools/diagram-check.ts";
 import { project } from "../kit/tools/diagram-delta.ts";
 import * as c from "../kit/tools/constants/diagrams.ts";
@@ -237,22 +238,52 @@ function rewritePlan(text: string): string {
   }
   return lines.join("\n");
 }
-type Options = { root: string; plans?: string; keep: boolean };
+function frozen(file: string, plans?: string): boolean {
+  const paths = c.MIGRATION_FROZEN_PATHS;
+  return file.split("/").slice(0, -1).includes(paths.directory)
+    || file.startsWith(`${paths.repoDirectory}/`)
+    || (paths.files as readonly string[]).includes(basename(file))
+    || !!plans && file.startsWith(`${plans}/${paths.plansDirectory}/`);
+}
+function rewriteDoc(text: string, file: string, migrated: Set<string>): string {
+  const repoint = (destination: string, base: string) => {
+    const path = destination.split(/[?#]/, 1)[0]!;
+    if (!path || /^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(path)) return destination;
+    let decoded: string;
+    try { decoded = decodeURIComponent(path.replace(/\\([\\()[\] ])/g, "$1")); } catch { return destination; }
+    return migrated.has(resolve(base, decoded)) ? destination.replace(/\.drawio(?=[?#]|$)/, c.EXTENSION) : destination;
+  };
+  // Consume code fences/spans before links so examples are not mistaken for link destinations.
+  return text.replace(
+    /(^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\2[ \t]*$)|(`+)([^\n]*?)\3|(\]\([ \t]*<?)([^<>\s]*(?:\.drawio)(?:[?#][^<>\s)]*)?)(?=>?(?:[ \t]+["'(]|[ \t]*\)))|(^ {0,3}\[[^\]\n]+\]:[ \t]*<?)([^<>\s]+)(?=>?(?:[ \t]|$))/gm,
+    (match, fence, _marker, ticks, code, link, destination, definition, reference) => {
+      if (fence) return match;
+      if (ticks) return `${ticks}${repoint(code, ".")}${ticks}`;
+      const prefix = link ?? definition, path = destination ?? reference;
+      return prefix + repoint(path, dirname(file));
+    },
+  );
+}
+type Options = { root: string; plans?: string; docs?: string; keep: boolean };
 function parseArgs(args: string[]): Options {
   const options: Partial<Options> & { keep: boolean } = { keep: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!, value = () => { const v = args[++i]; if (v === undefined || v.startsWith("--")) throw new Error(`${arg} needs a value`); return v.replace(/\/+$/, ""); };
     if (arg === "--root") options.root = value();
     else if (arg === "--plans") options.plans = value();
+    else if (arg === "--docs") {
+      if (options.docs !== undefined) throw new Error("--docs may be passed only once");
+      options.docs = value();
+    }
     else if (arg === "--keep") options.keep = true;
     else throw new Error(`unknown argument: ${arg}`);
   }
   if (!options.root) throw new Error("--root is required");
-  for (const dir of [options.root, options.plans]) if (dir !== undefined && (!c.safeRoot(dir) || !statSync(dir, { throwIfNoEntry: false })?.isDirectory())) throw new Error(`not a project-relative directory: ${dir}`);
+  for (const dir of [options.root, options.plans, options.docs]) if (dir !== undefined && (!c.safeRoot(dir) || !statSync(dir, { throwIfNoEntry: false })?.isDirectory())) throw new Error(`not a project-relative directory: ${dir}`);
   return options as Options;
 }
 export function main(args = Bun.argv.slice(2)): number {
-  const usage = "usage: drawio-to-mermaid.ts --root <diagrams root> [--plans <dir>] [--keep]";
+  const usage = "usage: drawio-to-mermaid.ts --root <diagrams root> [--plans <dir>] [--docs <dir>] [--keep]";
   let options: Options;
   try { options = parseArgs(args); } catch (error) { console.error(`${(error as Error).message}\n${usage}`); return 1; }
   const sources = scan(options.root, "**/*.drawio").sort();
@@ -283,15 +314,25 @@ export function main(args = Bun.argv.slice(2)): number {
   for (const file of generated) rmSync(file);
   const plans: string[] = [];
   if (options.plans) for (const file of scan(options.plans, "**/*.md")) {
-    if (file.startsWith(`${options.plans}/archived/`)) continue;
+    if (frozen(file, options.plans)) continue;
     const text = readFileSync(file, "utf8"), rewritten = rewritePlan(text);
     if (rewritten !== text) { writeFileSync(file, rewritten); plans.push(file); }
+  }
+  const docs: string[] = [];
+  if (options.docs) {
+    const migrated = new Set([...outputs.map(output => output.source), ...generated].map(source => resolve(source)));
+    for (const file of scan(options.docs, "**/*.md")) {
+      if (frozen(file, options.plans)) continue;
+      const text = readFileSync(file, "utf8"), rewritten = rewriteDoc(text, file, migrated);
+      if (rewritten !== text) { writeFileSync(file, rewritten); docs.push(file); }
+    }
   }
   console.log("drawio-to-mermaid report");
   for (const output of outputs) console.log(`  converted: ${output.source} → ${output.target} (${output.count} elements; projection equal)${options.keep ? "; source kept" : ""}`);
   for (const file of generated) console.log(`  deleted generated ERD: ${file} (regenerate with bun tools/erd-generate.ts)`);
   for (const file of plans) console.log(`  rewrote plan references: ${file}`);
-  if (!outputs.length && !generated.length && !plans.length) console.log("  nothing to convert");
+  for (const file of docs) console.log(`  rewrote doc references: ${file}`);
+  if (!outputs.length && !generated.length && !plans.length && !docs.length) console.log("  nothing to convert");
 
   let findings: string[] = [];
   try {
