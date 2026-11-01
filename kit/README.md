@@ -118,6 +118,7 @@ Declare entry runners only on the topology's active entries: `components` for mo
 Direct commands use `argsPrefix: []`; wrappers such as a package-manager test script may need `["--"]`. Only known formats receive selected paths/report flags; only pytest accepts `::` node IDs. Exit-code commands run unchanged and yield no counts or attributable mutation failures. Setup is approved once at installation and runs automatically only in disposable review clones; undeclared setup needs approval.
 The `vitest` format requires Vitest 3+ and a `testCommand` without a `run` subcommand: the harness adds `run` and its reporters.
 Optional `rootTest: { testCommand, testRunner }` declares root tests; no entry means no root fallback. The installer normalizes selected entries into `.omp/mosaic.json` `testing`, not a separate runner registry or Markdown scraper. Old manifests without either field retain their installed Markdown, inventory and runtime metadata.
+When any runner or rootTest is selected, every active entry's testCommand runs verbatim and must be runnable as written; angle-bracket placeholders such as `<file…>` or `<path>` are rejected at installation and by doctor.
 Read the [maintenance contract](docs/kit/maintenance.md) and [survey constraints](../install/placeholders.md) before changing runner metadata. Invocation reports missing project toolchains; structural doctor checks do not require them or Codex.
 {{/REVIEW_ENGINE}}
 

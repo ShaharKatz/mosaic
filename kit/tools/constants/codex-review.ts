@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 
 export const FORMATS = ["pytest", "jest", "vitest", "exit-code"] as const;
+export const COMMAND_PLACEHOLDER = /<[^<>\r\n]+>/;
 export type Runner = { format: typeof FORMATS[number]; setup: string[]; argsPrefix: string[]; cwd: string; env?: Record<string, string>; verifyCommand?: string };
 export type TestEntry = { repository: string; path: string; testCommand: string; testRunner: Runner };
 export const STATUS = { pass: "PASS", failed: "FAILED", error: "ERROR" } as const;
@@ -28,11 +29,12 @@ export function validateRunner(value: unknown, fallback: string): Runner {
     || Object.entries(runner.env).some(([key, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== "string" || /[\r\n\0]/.test(value)))) throw new Error("testRunner.env must contain non-secret single-line settings");
   return { ...runner, cwd };
 }
-export function validateTesting(value: unknown): TestEntry[] {
+export function validateTesting(value: unknown, commandFields?: string[]): TestEntry[] {
   if (!Array.isArray(value) || !value.length) throw new Error("testing must be a nonempty array");
   const keys = new Set<string>();
-  return value.map(entry => {
+  return value.map((entry, index) => {
     if (!entry || !safeRelative(entry.repository) || !safeRelative(entry.path) || !line(entry.testCommand)) throw new Error("testing entries require safe repository/path and nonempty testCommand");
+    if (COMMAND_PLACEHOLDER.test(entry.testCommand)) throw new Error(`${commandFields?.[index] ?? "testCommand"} for ${entry.repository}/${entry.path} contains a placeholder; the command runs verbatim and must be runnable as written`);
     const key = JSON.stringify([entry.repository, entry.path]);
     if (keys.has(key)) throw new Error("duplicate testing entry");
     keys.add(key);
