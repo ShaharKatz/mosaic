@@ -240,6 +240,35 @@ try {
     run(["--root", root, "--docs", "docs"], 0);
     equal(read("docs/architecture/overview.md"), '[spaced](<diagrams/schema space.erd.mmd?q=1#model> "Schema title")');
   });
+  test("custom_plans_alias_keeps_evidence_frozen", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    const text = `Evidence: \`${fixture}\`.`;
+    put("docs/planning/evidence/review.md", text);
+    symlinkSync("docs/planning", "planning-alias");
+    run(["--root", root, "--docs", "planning-alias", "--plans", "planning-alias"], 0);
+    equal(read("docs/planning/evidence/review.md"), text);
+  });
+  test("parenthesized_link_title", () => {
+    const erd = diagram(); erd.attrs.generator = "mosaic-prisma-erd";
+    save(erd, `${root}/schema.erd.drawio`);
+    put("docs/architecture/overview.md", "[title](diagrams/schema.erd.drawio (Title))");
+    run(["--root", root, "--docs", "docs"], 0);
+    equal(read("docs/architecture/overview.md"), "[title](diagrams/schema.erd.mmd (Title))");
+  });
+  test("balanced_parentheses_destination", () => {
+    const erd = diagram(); erd.attrs.generator = "mosaic-prisma-erd";
+    save(erd, `${root}/schema(v2).erd.drawio`);
+    const before = [
+      "[balanced](diagrams/schema(v2).erd.drawio)",
+      "[escaped](diagrams/schema\\(v2\\).erd.drawio#model 'Schema title')",
+      "[title](diagrams/schema(v2).erd.drawio (Title \\(v2\\)))",
+      "[reference]: diagrams/schema(v2).erd.drawio",
+      "[malformed](diagrams/schema(v2).erd.drawio (unterminated)",
+    ];
+    put("docs/architecture/overview.md", before.join("\n"));
+    run(["--root", root, "--docs", "docs"], 0);
+    equal(read("docs/architecture/overview.md"), before.map((line, index) => index < 4 ? line.replace(".drawio", ".mmd") : line).join("\n"));
+  });
   test("docs_unchanged_without_option", () => {
     const d = diagram(); element(d, "api"); save(d);
     const text = `[system](diagrams/fixture.drawio#api)\n\`${fixture}\`\n`;

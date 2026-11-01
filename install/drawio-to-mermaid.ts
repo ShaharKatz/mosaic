@@ -247,12 +247,56 @@ function frozen(file: string, plans?: string): boolean {
     || (paths.files as readonly string[]).includes(basename(file))
     || !!plans && file.startsWith(`${plans}/${paths.plansDirectory}/`);
 }
+// Return the destination's character range, but validate the enclosing inline link too.
+function markdownDestination(text: string, offset: number, inline: boolean): { start: number; end: number; after: number } | undefined {
+  let position = offset, start = offset, end: number;
+  if (text[position] === "<") {
+    start = ++position;
+    while (position < text.length && text[position] !== ">") {
+      if (/[\n\r<]/.test(text[position]!)) return;
+      if (text[position] === "\\" && /[!-/:-@[-`{-~]/.test(text[position + 1] ?? "")) position++;
+      position++;
+    }
+    if (text[position] !== ">") return;
+    end = position++;
+  } else {
+    let depth = 0;
+    while (position < text.length) {
+      const char = text[position]!;
+      if (char === "\\" && /[!-/:-@[-`{-~]/.test(text[position + 1] ?? "")) { position += 2; continue; }
+      if (/\s/.test(char)) break;
+      if (char === "<" || char.charCodeAt(0) < 32) return;
+      if (char === "(") depth++;
+      else if (char === ")") { if (!depth) break; depth--; }
+      position++;
+    }
+    if (depth) return;
+    end = position;
+  }
+  if (!inline) return position === text.length || /\s/.test(text[position]!) ? { start, end, after: position } : undefined;
+  const separator = position;
+  while (/[ \t\r\n]/.test(text[position] ?? "")) position++;
+  if (text[position] === ")") return { start, end, after: position + 1 };
+  // A title must be separated from the destination; its own delimiters do not belong to the path.
+  const opener = text[position], closer = opener === "(" ? ")" : opener;
+  if (position === separator || !opener || !['"', "'", "("].includes(opener)) return;
+  position++;
+  while (position < text.length && text[position] !== closer) {
+    if (opener === "(" && text[position] === "(") return;
+    if (text[position] === "\\" && /[!-/:-@[-`{-~]/.test(text[position + 1] ?? "")) position++;
+    position++;
+  }
+  if (text[position] !== closer) return;
+  position++;
+  while (/[ \t\r\n]/.test(text[position] ?? "")) position++;
+  return text[position] === ")" ? { start, end, after: position + 1 } : undefined;
+}
 function rewriteDoc(text: string, file: string, migrated: Set<string>): string {
   const repoint = (destination: string, base: string) => {
     const path = destination.split(/[?#]/, 1)[0]!;
     if (!path || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(path)) return destination;
     let decoded: string;
-    try { decoded = decodeURIComponent(path.replace(/\\([\\()[\] ])/g, "$1")); } catch { return destination; }
+    try { decoded = decodeURIComponent(path.replace(/\\([!-/:-@[-`{-~])/g, "$1")); } catch { return destination; }
     const target = decoded.startsWith("/") ? resolve(".", decoded.slice(1)) : resolve(base, decoded);
     if (!migrated.has(target)) return destination;
     // Preserve the original path spelling (including an encoded dot), query and fragment.
@@ -260,18 +304,28 @@ function rewriteDoc(text: string, file: string, migrated: Set<string>): string {
       (_suffix, dot) => dot + c.EXTENSION.slice(1));
     return rewritten + destination.slice(path.length);
   };
-  // Consume code fences/spans before links so examples are not mistaken for link destinations.
-  return text.replace(
-    /(^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\2[ \t]*$)|(`+)([^\n]*?)\3|(\]\([ \t]*)(<[^>\n]+>|[^\s<>]+?)(?=[ \t]*(?:\)|["']))|(^ {0,3}\[[^\]\n]+\]:[ \t]*)(<[^>\n]+>|[^\s<>]+)(?=[ \t]|$)/gm,
-    (match, fence, _marker, ticks, code, link, destination, definition, reference) => {
-      if (fence) return match;
-      if (ticks) return `${ticks}${repoint(code, ".")}${ticks}`;
-      const prefix = link ?? definition, path = destination ?? reference;
-      return prefix + (path.startsWith("<")
-        ? `<${repoint(path.slice(1, -1), dirname(file))}>`
-        : repoint(path, dirname(file)));
-    },
-  );
+  // The regex finds token starts only; the scanner handles destination escapes and nesting.
+  const tokens = /(^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\2[ \t]*$)|(`+)([^\n]*?)\3|(\]\([ \t\r\n]*)|(^ {0,3}\[[^\]\n]+\]:[ \t]*)/gm;
+  const pieces: string[] = [];
+  let copied = 0;
+  for (let token; (token = tokens.exec(text));) {
+    if (token[1]) continue;
+    let start: number, end: number, rewritten: string;
+    if (token[3]) {
+      start = token.index; end = tokens.lastIndex;
+      rewritten = `${token[3]}${repoint(token[4]!, ".")}${token[3]}`;
+    } else {
+      const destination = markdownDestination(text, tokens.lastIndex, !!token[5]);
+      if (!destination) continue;
+      ({ start, end } = destination);
+      rewritten = repoint(text.slice(start, end), dirname(file));
+      tokens.lastIndex = destination.after;
+    }
+    pieces.push(text.slice(copied, start), rewritten);
+    copied = end;
+  }
+  pieces.push(text.slice(copied));
+  return pieces.join("");
 }
 type Options = { root: string; plans?: string; docs?: string; keep: boolean };
 function parseArgs(args: string[]): Options {
@@ -297,8 +351,13 @@ export function main(args = Bun.argv.slice(2)): number {
   const docFiles: string[] = [];
   try {
     options = parseArgs(args);
+    const repo = realpathSync(".");
+    if (options.plans) {
+      const canonical = realpathWithinRoot(repo, options.plans);
+      if (!canonical) throw new Error(`plans directory escapes repository: ${options.plans}`);
+      options.plans = relative(repo, canonical);
+    }
     if (options.docs) {
-      const repo = realpathSync(".");
       if (!realpathWithinRoot(repo, options.docs)) throw new Error(`docs directory escapes repository: ${options.docs}`);
       for (const file of scan(options.docs, "**/*.md")) {
         const canonical = realpathWithinRoot(repo, file);
