@@ -27,6 +27,7 @@ const manifest = {
   rootTest: { testCommand: "uv run --with pytest pytest", testRunner: { format: "pytest", setup: [], argsPrefix: [], cwd: "." } },
 };
 try {
+  const quotedPlaceholders = ['npm test -- "<file…>"', "pytest '<path>'", '--file="<path>"'];
   for (const testCommand of [
     "make test < /dev/null > test.log",
     "make test </dev/null >/dev/null 2>&1",
@@ -55,14 +56,17 @@ try {
       remotes: { ...manifest.remotes, members: { first: "https://example.invalid/first.git", second: "https://example.invalid/second.git" } },
       [field]: entries };
     const file = p.join(scratch, `${topology}.json`), target = p.join(scratch, `${topology}-placeholder`);
-    fs.writeFileSync(file, JSON.stringify(configured));
-    await rejects(install({ manifest: file, target }), error => {
-      ok(error instanceof Error);
-      ok(error.message.includes(`${field}[1].testCommand`), error.message);
-      ok(error.message.includes(topology === "monorepo" ? "./second" : "second/."), error.message);
-      ok(error.message.includes("verbatim") && error.message.includes("runnable as written"), error.message);
-      return true;
-    }, `${field} placeholder must be rejected before installation`);
+    for (const testCommand of ["npm test -- <file…>", ...quotedPlaceholders]) {
+      entries[1].testCommand = testCommand;
+      fs.writeFileSync(file, JSON.stringify(configured));
+      await rejects(install({ manifest: file, target }), error => {
+        ok(error instanceof Error);
+        ok(error.message.includes(`${field}[1].testCommand`), error.message);
+        ok(error.message.includes(topology === "monorepo" ? "./second" : "second/."), error.message);
+        ok(error.message.includes("verbatim") && error.message.includes("runnable as written"), error.message);
+        return true;
+      }, `${field} placeholder must be rejected before installation: ${testCommand}`);
+    }
     entries[1].testCommand = "true < /dev/null > /dev/null";
     fs.writeFileSync(file, JSON.stringify(configured)); await install({ manifest: file, target });
     const metadataPath = p.join(target, ".omp/mosaic.json");
@@ -70,8 +74,8 @@ try {
     strictEqual(metadata.testing[1].testRunner.format, "exit-code");
     strictEqual(command([bun, "tools/doctor.ts"], target), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
     strictEqual(command(["sh", "-c", metadata.testing[1].testCommand], target), "");
-    for (const placeholder of ["<file…>", "<path>"]) {
-      metadata.testing[1].testCommand = `npm test -- ${placeholder}`;
+    for (const testCommand of ["npm test -- <file…>", "npm test -- <path>", ...quotedPlaceholders]) {
+      metadata.testing[1].testCommand = testCommand;
       fs.writeFileSync(metadataPath, JSON.stringify(metadata));
       const output = command([bun, "tools/doctor.ts"], target, 1);
       ok(output.includes("verbatim") && output.includes("runnable as written"), output);
