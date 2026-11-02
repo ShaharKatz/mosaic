@@ -38,6 +38,8 @@ try {
     "pytest -k 'a<b' -o x=y>z",
     'python3 -c "assert 1 < 2 > 0"',
     "cat <in>out",
+    "true </dev/null> /dev/null",
+    "make test <./in> ./out",
   ]) {
     deepStrictEqual(validateTesting([entry("exit-code", testCommand)]), [entry("exit-code", testCommand)], testCommand);
   }
