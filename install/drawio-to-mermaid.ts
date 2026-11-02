@@ -352,6 +352,10 @@ export function main(args = Bun.argv.slice(2)): number {
   try {
     options = parseArgs(args);
     const repo = realpathSync(".");
+    // Every path the rewrite compares (root, plans, docs) lives in one canonical repository frame.
+    const root = realpathWithinRoot(repo, options.root);
+    if (!root) throw new Error(`diagrams root escapes repository: ${options.root}`);
+    options.root = relative(repo, root) || ".";
     if (options.plans) {
       const canonical = realpathWithinRoot(repo, options.plans);
       if (!canonical) throw new Error(`plans directory escapes repository: ${options.plans}`);

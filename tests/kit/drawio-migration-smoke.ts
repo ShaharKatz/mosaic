@@ -220,6 +220,14 @@ try {
     run(["--root", root, "--docs", "history-alias"], 0);
     equal(read("docs/architecture/source/overview.md"), text);
   });
+  test("aliased_root_repoints_physical_links", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    put("docs/architecture/overview.md", "[system](diagrams/fixture.drawio#api)");
+    symlinkSync(root, "diagrams-alias");
+    run(["--root", "diagrams-alias", "--docs", "docs"], 0);
+    equal(read("docs/architecture/overview.md"), "[system](diagrams/fixture.mmd#api)");
+    ok(exists(output) && !exists(fixture));
+  });
   test("root_relative_destination", () => {
     const d = diagram(); element(d, "api"); save(d);
     put("docs/architecture/overview.md", `[system](/${fixture}?q=1#api "System title")`);
