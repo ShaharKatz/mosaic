@@ -1,16 +1,18 @@
 #!/usr/bin/env bun
 // One-time draw.io → Mermaid converter for /mosaic-kit upgrades (source-side only; never installed).
 // Run from the installed project root:
-//   bun <mosaic>/install/drawio-to-mermaid.ts --root <diagrams root> [--plans <dir>] [--keep]
+//   bun <mosaic>/install/drawio-to-mermaid.ts --root <diagrams root> [--plans <dir>] [--docs <dir>] [--keep]
 // Generated ERDs always live inside the diagrams root, so --root covers them.
 // Exit 0: converted and clean; 1: nothing written (usage, parse, misread-id or equivalence-gate failure);
 // 2: converted, but diagram-check findings remain.
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { inflateRawSync } from "node:zlib";
+import { basename, dirname, relative, resolve } from "node:path";
 import { Diagram, decisions, encodeLabel, serializeData, settings, validate } from "../kit/tools/diagram-check.ts";
 import { project } from "../kit/tools/diagram-delta.ts";
 import * as c from "../kit/tools/constants/diagrams.ts";
 import { GENERATED } from "../kit/tools/constants/erd.ts";
+import { realpathWithinRoot } from "../kit/tools/root-containment.ts";
 
 // ---- Pre-migration reader, copied from e2b4125 kit/tools/diagram-check.ts and constants/diagrams.ts ----
 const OLD_LAYERS = ["as-built", "intended", "retiring"] as const;
@@ -237,24 +239,137 @@ function rewritePlan(text: string): string {
   }
   return lines.join("\n");
 }
-type Options = { root: string; plans?: string; keep: boolean };
+function frozen(file: string, plans?: string): boolean {
+  const paths = c.MIGRATION_FROZEN_PATHS, directories = file.split("/").slice(0, -1);
+  return directories.includes(paths.directory)
+    || directories.some((part, index) => part === paths.plansSegment && directories[index + 1] === paths.plansDirectory)
+    || file.startsWith(`${paths.repoDirectory}/`)
+    || (paths.files as readonly string[]).includes(basename(file))
+    || !!plans && file.startsWith(`${plans}/${paths.plansDirectory}/`);
+}
+// Return the destination's character range, but validate the enclosing inline link too.
+function markdownDestination(text: string, offset: number, inline: boolean): { start: number; end: number; after: number } | undefined {
+  let position = offset, start = offset, end: number;
+  if (text[position] === "<") {
+    start = ++position;
+    while (position < text.length && text[position] !== ">") {
+      if (/[\n\r<]/.test(text[position]!)) return;
+      if (text[position] === "\\" && /[!-/:-@[-`{-~]/.test(text[position + 1] ?? "")) position++;
+      position++;
+    }
+    if (text[position] !== ">") return;
+    end = position++;
+  } else {
+    let depth = 0;
+    while (position < text.length) {
+      const char = text[position]!;
+      if (char === "\\" && /[!-/:-@[-`{-~]/.test(text[position + 1] ?? "")) { position += 2; continue; }
+      if (/\s/.test(char)) break;
+      if (char === "<" || char.charCodeAt(0) < 32) return;
+      if (char === "(") depth++;
+      else if (char === ")") { if (!depth) break; depth--; }
+      position++;
+    }
+    if (depth) return;
+    end = position;
+  }
+  if (!inline) return position === text.length || /\s/.test(text[position]!) ? { start, end, after: position } : undefined;
+  const separator = position;
+  while (/[ \t\r\n]/.test(text[position] ?? "")) position++;
+  if (text[position] === ")") return { start, end, after: position + 1 };
+  // A title must be separated from the destination; its own delimiters do not belong to the path.
+  const opener = text[position], closer = opener === "(" ? ")" : opener;
+  if (position === separator || !opener || !['"', "'", "("].includes(opener)) return;
+  position++;
+  while (position < text.length && text[position] !== closer) {
+    if (opener === "(" && text[position] === "(") return;
+    if (text[position] === "\\" && /[!-/:-@[-`{-~]/.test(text[position + 1] ?? "")) position++;
+    position++;
+  }
+  if (text[position] !== closer) return;
+  position++;
+  while (/[ \t\r\n]/.test(text[position] ?? "")) position++;
+  return text[position] === ")" ? { start, end, after: position + 1 } : undefined;
+}
+function rewriteDoc(text: string, file: string, migrated: Set<string>): string {
+  const repoint = (destination: string, base: string) => {
+    const path = destination.split(/[?#]/, 1)[0]!;
+    if (!path || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(path)) return destination;
+    let decoded: string;
+    try { decoded = decodeURIComponent(path.replace(/\\([!-/:-@[-`{-~])/g, "$1")); } catch { return destination; }
+    const target = decoded.startsWith("/") ? resolve(".", decoded.slice(1)) : resolve(base, decoded);
+    if (!migrated.has(target)) return destination;
+    // Preserve the original path spelling (including an encoded dot), query and fragment.
+    const rewritten = path.replace(/(\.|%2e)(?:d|%64)(?:r|%72)(?:a|%61)(?:w|%77)(?:i|%69)(?:o|%6f)$/i,
+      (_suffix, dot) => dot + c.EXTENSION.slice(1));
+    return rewritten + destination.slice(path.length);
+  };
+  // The regex finds token starts only; the scanner handles destination escapes and nesting.
+  const tokens = /(^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\2[ \t]*$)|(`+)([^\n]*?)\3|(\]\([ \t\r\n]*)|(^ {0,3}\[[^\]\n]+\]:[ \t]*(?:\r?\n[ \t]*)?)/gm;
+  const pieces: string[] = [];
+  let copied = 0;
+  for (let token; (token = tokens.exec(text));) {
+    if (token[1]) continue;
+    let start: number, end: number, rewritten: string;
+    if (token[3]) {
+      start = token.index; end = tokens.lastIndex;
+      rewritten = `${token[3]}${repoint(token[4]!, ".")}${token[3]}`;
+    } else {
+      const destination = markdownDestination(text, tokens.lastIndex, !!token[5]);
+      if (!destination) continue;
+      ({ start, end } = destination);
+      rewritten = repoint(text.slice(start, end), dirname(file));
+      tokens.lastIndex = destination.after;
+    }
+    pieces.push(text.slice(copied, start), rewritten);
+    copied = end;
+  }
+  pieces.push(text.slice(copied));
+  return pieces.join("");
+}
+type Options = { root: string; plans?: string; docs?: string; keep: boolean };
 function parseArgs(args: string[]): Options {
   const options: Partial<Options> & { keep: boolean } = { keep: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!, value = () => { const v = args[++i]; if (v === undefined || v.startsWith("--")) throw new Error(`${arg} needs a value`); return v.replace(/\/+$/, ""); };
     if (arg === "--root") options.root = value();
     else if (arg === "--plans") options.plans = value();
+    else if (arg === "--docs") {
+      if (options.docs !== undefined) throw new Error("--docs may be passed only once");
+      options.docs = value();
+    }
     else if (arg === "--keep") options.keep = true;
     else throw new Error(`unknown argument: ${arg}`);
   }
   if (!options.root) throw new Error("--root is required");
-  for (const dir of [options.root, options.plans]) if (dir !== undefined && (!c.safeRoot(dir) || !statSync(dir, { throwIfNoEntry: false })?.isDirectory())) throw new Error(`not a project-relative directory: ${dir}`);
+  for (const dir of [options.root, options.plans, options.docs]) if (dir !== undefined && (!c.safeRoot(dir) || !statSync(dir, { throwIfNoEntry: false })?.isDirectory())) throw new Error(`not a project-relative directory: ${dir}`);
   return options as Options;
 }
 export function main(args = Bun.argv.slice(2)): number {
-  const usage = "usage: drawio-to-mermaid.ts --root <diagrams root> [--plans <dir>] [--keep]";
+  const usage = "usage: drawio-to-mermaid.ts --root <diagrams root> [--plans <dir>] [--docs <dir>] [--keep]";
   let options: Options;
-  try { options = parseArgs(args); } catch (error) { console.error(`${(error as Error).message}\n${usage}`); return 1; }
+  const docFiles: string[] = [];
+  try {
+    options = parseArgs(args);
+    const repo = realpathSync(".");
+    // Every path the rewrite compares (root, plans, docs) lives in one canonical repository frame.
+    const root = realpathWithinRoot(repo, options.root);
+    if (!root) throw new Error(`diagrams root escapes repository: ${options.root}`);
+    options.root = relative(repo, root) || ".";
+    if (options.plans) {
+      const canonical = realpathWithinRoot(repo, options.plans);
+      if (!canonical) throw new Error(`plans directory escapes repository: ${options.plans}`);
+      options.plans = relative(repo, canonical);
+    }
+    if (options.docs) {
+      if (!realpathWithinRoot(repo, options.docs)) throw new Error(`docs directory escapes repository: ${options.docs}`);
+      for (const file of scan(options.docs, "**/*.md")) {
+        const canonical = realpathWithinRoot(repo, file);
+        if (!canonical) throw new Error(`docs file escapes repository: ${file}`);
+        docFiles.push(relative(repo, canonical));
+      }
+    }
+  } catch (error) { console.error(`${(error as Error).message}\n${usage}`); return 1; }
   const sources = scan(options.root, "**/*.drawio").sort();
   const generated: string[] = [], outputs: { source: string; target: string; text: string; count: number }[] = [];
   const errors: string[] = [], keywords: string[] = [], mismatches: string[] = [];
@@ -283,15 +398,25 @@ export function main(args = Bun.argv.slice(2)): number {
   for (const file of generated) rmSync(file);
   const plans: string[] = [];
   if (options.plans) for (const file of scan(options.plans, "**/*.md")) {
-    if (file.startsWith(`${options.plans}/archived/`)) continue;
+    if (frozen(file, options.plans)) continue;
     const text = readFileSync(file, "utf8"), rewritten = rewritePlan(text);
     if (rewritten !== text) { writeFileSync(file, rewritten); plans.push(file); }
+  }
+  const docs: string[] = [];
+  if (options.docs) {
+    const migrated = new Set([...outputs.map(output => output.source), ...generated].map(source => resolve(source)));
+    for (const file of docFiles) {
+      if (frozen(file, options.plans)) continue;
+      const text = readFileSync(file, "utf8"), rewritten = rewriteDoc(text, file, migrated);
+      if (rewritten !== text) { writeFileSync(file, rewritten); docs.push(file); }
+    }
   }
   console.log("drawio-to-mermaid report");
   for (const output of outputs) console.log(`  converted: ${output.source} → ${output.target} (${output.count} elements; projection equal)${options.keep ? "; source kept" : ""}`);
   for (const file of generated) console.log(`  deleted generated ERD: ${file} (regenerate with bun tools/erd-generate.ts)`);
   for (const file of plans) console.log(`  rewrote plan references: ${file}`);
-  if (!outputs.length && !generated.length && !plans.length) console.log("  nothing to convert");
+  for (const file of docs) console.log(`  rewrote doc references: ${file}`);
+  if (!outputs.length && !generated.length && !plans.length && !docs.length) console.log("  nothing to convert");
 
   let findings: string[] = [];
   try {
