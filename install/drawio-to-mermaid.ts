@@ -305,7 +305,7 @@ function rewriteDoc(text: string, file: string, migrated: Set<string>): string {
     return rewritten + destination.slice(path.length);
   };
   // The regex finds token starts only; the scanner handles destination escapes and nesting.
-  const tokens = /(^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\2[ \t]*$)|(`+)([^\n]*?)\3|(\]\([ \t\r\n]*)|(^ {0,3}\[[^\]\n]+\]:[ \t]*)/gm;
+  const tokens = /(^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\2[ \t]*$)|(`+)([^\n]*?)\3|(\]\([ \t\r\n]*)|(^ {0,3}\[[^\]\n]+\]:[ \t]*(?:\r?\n[ \t]*)?)/gm;
   const pieces: string[] = [];
   let copied = 0;
   for (let token; (token = tokens.exec(text));) {

@@ -263,11 +263,12 @@ try {
       "[escaped](diagrams/schema\\(v2\\).erd.drawio#model 'Schema title')",
       "[title](diagrams/schema(v2).erd.drawio (Title \\(v2\\)))",
       "[reference]: diagrams/schema(v2).erd.drawio",
+      "[next-line]:\n  diagrams/schema(v2).erd.drawio",
       "[malformed](diagrams/schema(v2).erd.drawio (unterminated)",
     ];
     put("docs/architecture/overview.md", before.join("\n"));
     run(["--root", root, "--docs", "docs"], 0);
-    equal(read("docs/architecture/overview.md"), before.map((line, index) => index < 4 ? line.replace(".drawio", ".mmd") : line).join("\n"));
+    equal(read("docs/architecture/overview.md"), before.map((line, index) => index < 5 ? line.replace(".drawio", ".mmd") : line).join("\n"));
   });
   test("docs_unchanged_without_option", () => {
     const d = diagram(); element(d, "api"); save(d);
