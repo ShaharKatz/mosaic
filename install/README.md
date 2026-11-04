@@ -43,6 +43,15 @@ MCP requires the exact runtime server name, team when known, and queue state/lab
 The manifest uses `tracking: { mode: "none" | "local" | "mcp", mcp?: { server: string, team?: string, queue?: string } }`; `mcp` is present only in MCP mode, with `server` required. The renderer omits local-only tool/data/scout paths for `none`/`mcp` and selects the corresponding rules and plan template. See [H-tracking](migration-map.md#tracking-survey-and-h-tracking) and [rendering](placeholders.md).
 Later mode changes use `/mosaic-kit`: re-render a fresh scratch baseline, reconcile adaptations, preserve existing plan/ticket records, and archive local data before removing obsolete kit-owned installation paths. This is a reviewed cutover, not a forced overwrite; the [maintenance guide](../kit/docs/kit/maintenance.md) owns the steps.
 
+## Optional handoff acceptance
+
+Offer `handoff` only for GitHub pull-request landing and only on owner opt-in; omission keeps today's workflow. [H-handoff](migration-map.md#handoff-survey-and-h-handoff) records named flows, area matches, ordered role gates, permitted tracker-reply/PR-review surfaces, verified roster people and identities, and preview artifacts. The plan's approval brief confirms the flow and offers "skip handoff"; after final review, recorded acceptance is required before the human merges. Returned feedback follows the existing classified repair route without reopening the archived `done` plan.
+
+The [manifest example](../kit/README.md#optional-handoff-acceptance) uses `handoff: { flows, preview?, requestReview }`. Author the Registry-class roster through an overlay or a reviewed post-install edit before doctor. A selected preview card is project-owned and must exist in the target or overlay at installation, with its produce mode, served-commit check, access/classification and teardown procedure; no preview is generated at install time. Set `requestReview: false` only for an owner-attested tracker pipe reacting to GitHub review requests; the tracker mention then notifies. A ready-for-merge automation must not target the handoff state.
+
+Retain read-only proof of identities, complete comment/review access, state mappings and preview procedure references; make no tracker, review-request or deployment writes during installation. Doctor and `bun tools/handoff.ts roster` validate committed definitions; unavailable external proof is Unverified. After installation each contributor runs `/mosaic-onboard` to choose their handle, default flow and per-role acceptors in a validated user file outside the repo; the skill never edits the roster. Later module changes use the reviewed render-and-compare maintenance procedure.
+
+
 ## Owner-chosen cutoff
 
 For a mixed historical corpus, choose `cutoff: yes` in phase 0 (ruling H0); when the human is unavailable, the default is **no cutoff**. See [Cutoff mode](migration-map.md#cutoff-mode) for the archive boundary and owner-named process/runbook exceptions.

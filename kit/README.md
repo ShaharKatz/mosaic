@@ -150,6 +150,72 @@ Project-owned context files may be in-root symlinks. Existing specialist agents 
 reported, even under `--force`; explicit project overlay entries take precedence. Upgrade kit-owned
 twins through the scratch procedure, not by overwriting project reviewers.
 
+### Optional handoff acceptance
+
+Opt in with `handoff` only for GitHub pull-request landing. After final review reaches exact-head
+readiness, a plan can hand the reviewed pull request to a named roster person for acceptance
+before the human merges. The approval brief confirms the flow and always offers "skip handoff",
+recorded as `flow: none — <reason>`; this is a landing precondition, not a new plan status.
+
+For an MCP-tracked project with a verified `QA` state and an attested review-request tracker pipe:
+
+```json
+{
+  "handoff": {
+    "flows": [
+      {
+        "id": "design-acceptance",
+        "areas": ["services/frontend/**"],
+        "gates": [
+          {
+            "role": "designer",
+            "surfaces": ["tracker-reply", "pr-review"],
+            "artifacts": ["pr", "preview"],
+            "state": "QA"
+          }
+        ]
+      }
+    ],
+    "preview": "docs/surfaces/preview.md",
+    "requestReview": false
+  }
+}
+```
+
+Names, paths and states above are illustrative, never seed data. Flows have unique ids and
+nonempty ordered gates with one gate per role; optional `areas` are installation-relative globs.
+`tracker-reply` needs local replay or MCP tracking; `pr-review` uses GitHub. Without tracking,
+only PR reviews are available. Gate `state` is optional and MCP-only; verify the team has it.
+Artifacts default to `["pr"]`; including `preview` requires a project-owned card at `preview`.
+`requestReview` defaults to true. Set false only when the owner attests that requesting a GitHub
+review triggers a tracker state change; the tracker mention is then the notification. A
+ready-for-merge automation must not target the gate's state. Installation makes no tracker,
+review-request or deployment writes; record the [H-handoff ruling](../install/migration-map.md#handoff-survey-and-h-handoff) and read-only proof.
+
+Selection installs `docs/process/handoff.md` and its omp rule symlink, the Registry-class roster
+at `docs/surfaces/people.md`, `tools/handoff.ts` with shared constants, and `/mosaic-onboard` twins.
+Populate the roster through a project overlay or a reviewed post-install edit before doctor:
+stable handles, roles, verified tracker author ids/mentions and GitHub logins, plus preferences
+that stay within each gate's policy; never emails or secrets. The kit ships no preview card.
+When selected, the card must exist in the target or overlay before installation and follow the
+handoff rule's format: `produce: pipe`, `command`, `manual` or `skill:<name>`, then Produce,
+Served commit, Access and classification, and Lifetime and teardown sections. Any named skill
+must resolve; preview production occurs only at request time under the approved flow.
+
+Run `bun tools/handoff.ts roster` for people and `resolve --plan <path>` for draft choices.
+Plan `flow:` overrides personal defaults, then area matching; ambiguous matches need the human.
+Per-role `acceptors:` override personal choices, then the sole role holder; unresolved people
+are asked for, not invented. `/mosaic-onboard` writes only the validated user file under
+`$XDG_CONFIG_HOME` (or `~/.config`), shared across checkouts by the committed link-remote key.
+It never edits the repo. `bun tools/handoff.ts user` shows the path, validity and saved settings.
+`bun tools/handoff.ts status --plan <path>` validates archived Execution-log lines: exit 0 means
+no gates or all cleared, 1 means pending, 2 means cannot-evaluate. Recorded acceptance must
+still hold on the reviewed head immediately before merge. Returned feedback is classified as
+defect, amendment or deferral and repaired through the existing review route, not a reopened plan.
+Omitting `handoff` installs none of its files or conditional callers. Later switches use the
+same reviewed scratch-render comparison as tracking/landing and preserve historical records.
+
+
 ## Reference
 
 ### Topology and default branch
@@ -187,6 +253,7 @@ The skill supplies every value from survey evidence; source Markdown uses these 
 | `TRACKING_NONE` / `TRACKING_LOCAL` / `TRACKING_MCP` | Mode blocks with slash-prefixed closing tokens; keep only the selected mode; may contain topology blocks |
 | `LANDING_DIRECT` / `LANDING_PULL_REQUEST` | Landing blocks with slash-prefixed closing tokens; selected after tracking and before topology; may contain topology blocks |
 | `CLOSE_OUT_TWO_COMMIT` / `CLOSE_OUT_DEFAULT` | Close-out blocks with slash-prefixed closing tokens; selected after landing and before topology; opt-in two-commit layout or unchanged default layout |
+| `HANDOFF` | Own-line, slash-closed opt-in block; keeps handoff callers only when selected, including inside tracking/landing blocks |
 | `MULTI_REPO` / `MONOREPO` | Non-nested topology blocks selected after tracking and landing blocks; then expand value tokens |
 | `STANDARDS` | Optional Standards section and selected canonical links; empty when none selected |
 | `STANDARD_PATHS` / `STANDARD_SCOPE` | JSON-quoted Claude paths list / one-line JSON sequence of complete omp edit-write scope tokens |

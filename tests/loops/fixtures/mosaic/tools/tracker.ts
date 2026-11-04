@@ -7,7 +7,7 @@ type Managed = {
 	plan: string | null; repos: string[]; areas: string[]; branch: Record<string, string>; writer: string;
 	lastEvent: { event: string; ts: string }; parked: string | null; resumeState?: string;
 };
-type Comment = { id: string; body: string; author: string; createdAt: string; writer?: string };
+type Comment = { id: string; body: string; author: string; createdAt: string; writer?: string; parentId?: string; onBehalfOf?: string | null };
 type Item = {
 	key: string; id: string; title: string; body: string; state: string; assignee: string | null;
 	labels: string[]; team: string; url: string; updatedAt: string; repos: string[];
@@ -17,12 +17,12 @@ type Item = {
 type Receipt = { repo: string; ref: string; commit: string; reachable: true };
 type Payloads = {
 	intent: { id: string; title: string; repos: string[]; areas: string[]; plan: string | null; url: string };
-	event: { event: string; note?: string; receipt?: Receipt[] };
-	comment: { id: string; body: string };
+	event: { event: string; note?: string; receipt?: Receipt[]; takeover?: true };
+	comment: { id: string; body: string; parentId?: string; takeover?: true };
 };
 type Entry = { [K in keyof Payloads]: { ts: string; op: K; key: string; writer: string; payload: Payloads[K] } }[keyof Payloads];
 const terminal: Record<string, true> = { done: true, abandoned: true, canceled: true, cancelled: true, duplicate: true };
-const events: Record<string, true> = { approved: true, executing: true, review: true, done: true, abandoned: true, parked: true, resumed: true };
+const events: Record<string, true> = { approved: true, executing: true, review: true, handoff: true, done: true, abandoned: true, parked: true, resumed: true };
 // Pretty output: the agent runtime truncates long tool-output lines, and a compact item array exceeds that limit.
 const json = (value: unknown) => console.log(JSON.stringify(value, null, 2));
 const nonempty = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
@@ -31,7 +31,8 @@ const timestamp = (value: unknown): value is string => nonempty(value) && Number
 class Refused extends Error {}
 const refuse = (reason: string): never => { throw new Refused(reason); };
 const begin = "<!-- mosaic:begin -->", end = "<!-- mosaic:end -->";
-const commentHash = (key: string, body: string): string => createHash("sha256").update(key + body).digest("hex");
+const commentHash = (key: string, body: string, parentId?: string): string => createHash("sha256")
+	.update(parentId === undefined ? key + body : JSON.stringify([key, parentId, body])).digest("hex");
 
 function csv(value: string): string[] {
 	// Commas inside brace/class globs are not area separators.
@@ -69,16 +70,23 @@ function writerToken(value: string): string {
 	if (!/^[A-Za-z0-9_-]+(?:#[1-9][0-9]*)?$/.test(value)) refuse("invalid opaque writer token; use token#generation without paths or hostnames");
 	return value.includes("#") ? value : `${value}#1`;
 }
-function checkWriter(item: Item, writer: string): void {
+function checkWriter(item: Item, writer: string, takeover = false): void {
 	const owner = item.managed?.writer ?? item.comments.find(comment => comment.writer)?.writer;
-	if (owner ? owner !== writer : !writer.endsWith("#1")) refuse("WRITER-CONFLICT");
+	if (takeover) {
+		const previous = /^([A-Za-z0-9_-]+)#([1-9][0-9]*)$/.exec(owner ?? "");
+		const next = /^([A-Za-z0-9_-]+)#([1-9][0-9]*)$/.exec(writer);
+		if (item.managed?.lastEvent.event !== "handoff" || !previous || !next || previous[1] === next[1]
+			|| BigInt(next[2]!) !== BigInt(previous[2]!) + 1n) refuse("WRITER-CONFLICT");
+	} else if (owner ? owner !== writer : !writer.endsWith("#1")) refuse("WRITER-CONFLICT");
 }
 function validateItem(item: Item): void {
 	if (!item || ![item.key, item.id, item.title, item.state, item.team, item.url].every(nonempty)
 		|| typeof item.body !== "string" || !timestamp(item.updatedAt) || !strings(item.repos) || !item.repos.length
 		|| !strings(item.labels) || (item.assignee !== null && !nonempty(item.assignee))
 		|| !Array.isArray(item.attachments) || !Array.isArray(item.comments)
-		|| item.comments.some(comment => !comment || !nonempty(comment.id) || typeof comment.body !== "string")) {
+		|| item.comments.some(comment => !comment || !nonempty(comment.id) || typeof comment.body !== "string"
+			|| (comment.parentId !== undefined && !nonempty(comment.parentId))
+			|| (comment.onBehalfOf !== undefined && comment.onBehalfOf !== null && typeof comment.onBehalfOf !== "string"))) {
 		throw new Error("malformed inventory item");
 	}
 	const managed = item.managed;
@@ -127,13 +135,19 @@ function apply(items: Map<string, Item>, entry: Entry): void {
 	}
 	const item = items.get(entry.key);
 	if (!item) throw new Error(`outbox refers to unknown item ${entry.key}`);
-	if (entry.op === "comment" && item.comments.some(comment => comment.id === entry.payload.id)) return;
-	checkWriter(item, entry.writer);
+	if (entry.op === "comment" && !entry.payload.takeover && item.comments.some(comment => comment.id === entry.payload.id)) return;
+	checkWriter(item, entry.writer, entry.payload.takeover);
 	if (entry.op === "comment") {
-		const payload = entry.payload;
-		if (typeof payload.body !== "string" || payload.id !== commentHash(entry.key, payload.body)) throw new Error("malformed comment event");
-		item.comments.push({ ...payload, author: entry.writer, writer: entry.writer, createdAt: entry.ts });
-		const label = disposition(payload.body, item.key);
+		const { id, body, parentId, takeover } = entry.payload;
+		if (typeof body !== "string" || id !== commentHash(entry.key, body, parentId)) throw new Error("malformed comment event");
+		if (parentId !== undefined && !item.comments.some(comment => comment.id === parentId)) refuse(`unknown parent comment ${parentId}`);
+		if (takeover && item.managed) {
+			item.managed.writer = entry.writer;
+			item.body = managedBody(item.body, item.managed);
+		}
+		if (!item.comments.some(comment => comment.id === id)) item.comments.push({ id, body, ...(parentId !== undefined ? { parentId } : {}),
+			author: entry.writer, writer: entry.writer, createdAt: entry.ts });
+		const label = disposition(body, item.key);
 		if (label) item.labels = [...item.labels.filter(label => !/^intake:(inline|light|plan|recommend-close|held)$/.test(label)), `intake:${label}`];
 		item.updatedAt = entry.ts;
 		return;
@@ -143,6 +157,7 @@ function apply(items: Map<string, Item>, entry: Entry): void {
 	if (entry.op === "event") {
 		const { event, note, receipt } = entry.payload;
 		if (!Object.hasOwn(events, event)) throw new Error("unknown lifecycle event");
+		if (event === "handoff" && Object.hasOwn(terminal, item.state)) refuse("handoff requires a non-terminal item");
 		if (event === "done") receipts(receipt, item.repos);
 		if (event === "parked") {
 			if (!nonempty(note)) refuse("parked requires --note with reason and resume condition");
@@ -154,6 +169,7 @@ function apply(items: Map<string, Item>, entry: Entry): void {
 		item.state = event === "resumed" ? managed.resumeState! : event;
 		if (event === "resumed") { managed.parked = null; delete managed.resumeState; }
 		managed.lastEvent = { event, ts: entry.ts };
+		if (entry.payload.takeover) managed.writer = entry.writer;
 	} else throw new Error("unknown outbox operation");
 	item.managed = managed;
 	item.updatedAt = entry.ts;
@@ -190,7 +206,7 @@ function main(): void {
 		const arg = raw[i];
 		if (!arg.startsWith("--")) { positionals.push(arg); continue; }
 		if (flags.has(arg)) throw new Error(`duplicate flag ${arg}`);
-		if (arg === "--all") { flags.set(arg, "true"); continue; }
+		if (arg === "--all" || arg === "--take-over") { flags.set(arg, "true"); continue; }
 		const value = raw[++i];
 		if (!nonempty(value) || value.startsWith("--")) throw new Error(`missing value for ${arg}`);
 		flags.set(arg, value);
@@ -198,7 +214,7 @@ function main(): void {
 	const [command, key, event] = positionals;
 	const options: Record<string, string[]> = { list: ["--state", "--label", "--team", "--all"], get: [],
 		intersect: ["--areas", "--repos"], intent: ["--title", "--repos", "--areas", "--plan", "--writer"],
-		event: ["--writer", "--note", "--receipt"], comment: ["--file", "--writer"], receipt: [] };
+		event: ["--writer", "--note", "--receipt", "--take-over"], comment: ["--file", "--writer", "--parent", "--take-over"], receipt: [] };
 	if (!Object.hasOwn(options, command)) throw new Error("usage: bun tools/tracker.ts [--provider replay] [--replay <dir>] list|get|intersect|intent|event|comment|receipt");
 	for (const flag of flags.keys()) if (!["--replay", "--provider"].includes(flag) && !options[command].includes(flag)) throw new Error(`unsupported ${flag} for ${command}`);
 	const arity = command === "event" ? 3 : ["get", "comment", "receipt"].includes(command) ? 2 : 1;
@@ -267,19 +283,24 @@ function main(): void {
 	} else if (command === "comment") {
 		const item = itemFor(key), writer = writerToken(required("--writer"));
 		const body = readFileSync(resolve(required("--file")), "utf8");
-		const id = commentHash(key, body);
+		const parentId = flags.get("--parent"), takeover = flags.has("--take-over");
+		if (takeover) checkWriter(item, writer, true);
+		if (parentId !== undefined && !item.comments.some(comment => comment.id === parentId)) refuse(`unknown parent comment ${parentId}`);
+		const id = commentHash(key, body, parentId);
 		const existing = item.comments.find(comment => comment.id === id);
-		if (existing) console.log(existing.id);
+		if (existing && !takeover) console.log(existing.id);
 		else {
-			checkWriter(item, writer);
-			append({ ts: new Date().toISOString(), op: "comment", key, writer, payload: { id, body } });
+			checkWriter(item, writer, takeover);
+			append({ ts: new Date().toISOString(), op: "comment", key, writer,
+				payload: { id, body, ...(parentId !== undefined ? { parentId } : {}), ...(takeover ? { takeover: true } : {}) } });
 			console.log(id);
 		}
 	} else if (command === "event") {
 		const item = itemFor(key), writer = writerToken(required("--writer"));
-		checkWriter(item, writer);
+		checkWriter(item, writer, flags.has("--take-over"));
 		if (!Object.hasOwn(events, event)) refuse(`unsupported event ${event}`);
 		const payload: Payloads["event"] = { event };
+		if (flags.has("--take-over")) payload.takeover = true;
 		if (flags.has("--note")) payload.note = required("--note");
 		if (flags.has("--receipt")) {
 			let supplied: unknown;

@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { install } from "../../kit/install.ts";
 import { BUNDLE_FILES, DIAGRAMS_ROOT, REPLACED_MODE_MESSAGE } from "../../kit/tools/constants/diagrams.ts";
 import { BUNDLE_FILES as ERD_FILES } from "../../kit/tools/constants/erd.ts";
+import { parseRoster, ROSTER_HEADER, ROSTER_PATH } from "../../kit/tools/constants/handoff.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "mosaic-tooling-"));
 const target = join(scratch, "target");
@@ -255,6 +256,165 @@ async function exerciseSpecialists(input: Record<string, unknown>): Promise<void
 		strictEqual(doctor().exitCode, 1);
 	}
 	console.log("PASS specialist rejection: unknown agent, missing section, unsafe/unmatched glob, duplicate design-system option and incompatible collision mode");
+}
+async function exerciseHandoff(input: Record<string, unknown>): Promise<void> {
+	const moduleFiles = ["docs/process/handoff.md", ".omp/rules/handoff.md", ROSTER_PATH,
+		"tools/handoff.ts", "tools/constants/handoff.ts", ".omp/skills/mosaic-onboard/SKILL.md", ".claude/skills/mosaic-onboard/SKILL.md"];
+	const previewPath = "docs/surfaces/preview.md";
+	const roster = `# People\n\n${ROSTER_HEADER}\n|---|---|---|---|---|---|\n`
+		+ "| @dana | designer | user-dana | @Dana | dana-l | surface: pr-review; artifacts: preview, pr |\n"
+		+ "| @quinn | qa | user-quinn | @Quinn | quinn-q | — |\n";
+	const preview = "# Preview: Branch\n- produce: skill:project-preview\n"
+		+ "## Produce\nRun the project preview skill for the reviewed head.\n"
+		+ "## Served commit\nCompare the version endpoint SHA with the reviewed head.\n"
+		+ "## Access and classification\nRequires project login; the URL may be shared in the tracker.\n"
+		+ "## Lifetime and teardown\nThe contributor stops the preview after merge or abandonment.\n";
+	const putAt = (root: string, file: string, content: string) => {
+		mkdirSync(dirname(join(root, file)), { recursive: true });
+		writeFileSync(join(root, file), content);
+	};
+	const settingsFor = (topology: string, mode: string, enabled: boolean) => ({
+		...input, topology, tracking: { mode, ...(mode === "mcp" ? { mcp: { server: "linear", team: "Product", queue: "Ready" } } : {}) },
+		landing: { mode: "pull-request", host: "github" },
+		members: topology === "multi-repo" ? [{ name: "member", path: "group/member", stack: "project-defined", testCommand: "true", coverageNote: "" }] : [],
+		remotes: { link: "https://example.invalid/root.git", members: { member: "https://example.invalid/member.git" } },
+		...(enabled ? { handoff: {
+			flows: [{ id: "design-acceptance", areas: [`${topology === "multi-repo" ? "group/member/" : ""}surface/**`], gates: [
+				{ role: "designer", surfaces: mode === "none" ? ["pr-review"] : ["tracker-reply", "pr-review"], artifacts: ["pr", "preview"],
+					...(mode === "mcp" ? { state: "QA" } : {}) },
+				{ role: "qa", surfaces: ["pr-review"] },
+			] }], preview: previewPath, ...(mode === "mcp" ? { requestReview: false } : {}),
+		} } : {}),
+	});
+	const doctor = (root: string, code: number) => {
+		const result = Bun.spawnSync([bun, "tools/doctor.ts"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+		strictEqual(result.exitCode, code, `${result.stdout}\n${result.stderr}`);
+		return result.stdout.toString();
+	};
+	for (const topology of ["monorepo", "multi-repo"]) for (const mode of ["none", "local", "mcp"]) for (const enabled of [false, true]) {
+		const fresh = join(scratch, `handoff-${topology}-${mode}-${enabled}`), overlay = `${fresh}-overlay`;
+		if (enabled) {
+			putAt(overlay, ROSTER_PATH, roster);
+			const previewRoot = topology === "monorepo" ? overlay : fresh;
+			putAt(previewRoot, previewPath, preview);
+			putAt(previewRoot, `${topology === "monorepo" ? ".claude" : ".omp"}/skills/project-preview/SKILL.md`, "# Project preview\nServe the reviewed head in an isolated preview.\n");
+		} else {
+			// Even an overlay cannot enable an unselected module.
+			for (const file of moduleFiles) putAt(overlay, file, "Excluded overlay content.\n");
+			for (const port of [".omp", ".claude"]) putAt(overlay, `${port}/skills/mosaic-onboard/extra.txt`, "Excluded extra file.\n");
+		}
+		writeFileSync(manifest, JSON.stringify(settingsFor(topology, mode, enabled)));
+		await install({ manifest, target: fresh, overlay });
+		for (const file of moduleFiles) strictEqual(existsSync(join(fresh, file)), enabled, file);
+		for (const port of [".omp", ".claude"]) strictEqual(existsSync(join(fresh, `${port}/skills/mosaic-onboard`)), enabled);
+		strictEqual(existsSync(join(fresh, "docs/surfaces")), enabled);
+		const template = readFileSync(join(fresh, "docs/plans/TEMPLATE.md"), "utf8");
+		strictEqual(/^flow: TBD\b/m.test(template), enabled);
+		strictEqual(/^acceptors: \{\}/m.test(template), enabled);
+		if (!enabled) ok(!/^flow:/m.test(template));
+		const metadata = JSON.parse(readFileSync(join(fresh, ".omp/mosaic.json"), "utf8"));
+		strictEqual(Object.hasOwn(metadata, "handoff"), enabled);
+		if (enabled) {
+			strictEqual(metadata.handoff.requestReview, mode !== "mcp");
+			deepStrictEqual(metadata.handoff.flows[0].gates[1].artifacts, ["pr"]);
+			strictEqual(readlinkSync(join(fresh, ".omp/rules/handoff.md")), "../../docs/process/handoff.md");
+		}
+		strictEqual(doctor(fresh, 0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+		console.log(`PASS handoff ${enabled ? "enabled" : "disabled"}/${mode}/${topology}: doctor 0/0/0`);
+	}
+	const fresh = join(scratch, "handoff-monorepo-local-true"), overlay = `${fresh}-overlay`;
+	const settings = settingsFor("monorepo", "local", true);
+	const handoff = settings.handoff!;
+	const flow = handoff.flows[0]!, gate = flow.gates[0]!;
+	const withGate = (patch: Record<string, unknown>) => ({ ...handoff, flows: [{ ...flow, gates: [{ ...gate, ...patch }, flow.gates[1]] }] });
+	for (const [name, patch, expected] of [
+		["direct landing", { landing: { mode: "direct" } }, /handoff requires landing.mode: pull-request/],
+		["tracker without tracking", { tracking: { mode: "none" } }, /tracker-reply requires tracking.mode/],
+		["local state", { handoff: withGate({ state: "QA" }) }, /state.*requires tracking.mode: mcp/],
+		["unknown surface", { handoff: withGate({ surfaces: ["chat"] }) }, /surfaces must be unique values/],
+		["duplicate role", { handoff: { ...handoff, flows: [{ ...flow, gates: [gate, gate] }] } }, /role repeats designer/],
+		["artifacts without pr", { handoff: withGate({ artifacts: ["preview"] }) }, /artifacts.*include pr/],
+		["preview without card binding", { handoff: { ...handoff, preview: undefined } }, /preview requires handoff.preview/],
+		["missing preview card", { handoff: { ...handoff, preview: "docs/surfaces/missing.md" } }, /Missing handoff preview card/],
+	] as const) {
+		writeFileSync(manifest, JSON.stringify({ ...settings, ...patch }));
+		await rejects(install({ manifest, target: fresh, overlay, force: true }), expected, name);
+	}
+	writeFileSync(manifest, JSON.stringify(settings));
+	for (const [file, broken, expected] of [
+		[previewPath, "# Preview: Broken\n- produce: invalid\n", /Invalid handoff preview card/],
+		[previewPath, preview.replace("skill:project-preview", "skill:unavailable-preview"), /unavailable skill/],
+		[ROSTER_PATH, roster.replace("| designer |", "| product |"), /no roster person holds role designer/],
+	] as const) {
+		const original = readFileSync(join(overlay, file), "utf8");
+		try {
+			putAt(overlay, file, broken);
+			await rejects(install({ manifest, target: fresh, overlay, force: true }), expected);
+		} finally { putAt(overlay, file, original); }
+	}
+	// Target rosters are project-owned, including during forced reinstalls.
+	await install({ manifest, target: fresh, force: true });
+	strictEqual(readFileSync(join(fresh, ROSTER_PATH), "utf8"), roster);
+	try {
+		putAt(fresh, ROSTER_PATH, roster.replace("| designer |", "| product |"));
+		await rejects(install({ manifest, target: fresh, force: true }), /no roster person holds role designer/);
+	} finally { putAt(fresh, ROSTER_PATH, roster); }
+	const metadataText = readFileSync(join(fresh, ".omp/mosaic.json"), "utf8"), metadata = JSON.parse(metadataText);
+	for (const [file, broken, expected] of [
+		[ROSTER_PATH, roster.replace("| designer |", "| product |"), "no roster person holds role designer"],
+		[previewPath, preview.replace("## Served commit", "## Removed commit section"), "missing section ## Served commit"],
+		[previewPath, preview.replace("skill:project-preview", "skill:unavailable-preview"), "unavailable-preview"],
+		[".omp/mosaic.json", JSON.stringify({ ...metadata, landing: { mode: "direct" } }), "handoff requires landing.mode: pull-request"],
+	] as const) {
+		const original = readFileSync(join(fresh, file), "utf8");
+		try {
+			putAt(fresh, file, broken);
+			const output = doctor(fresh, 1);
+			ok(output.includes("FAIL ") && output.includes(expected), output);
+		} finally { putAt(fresh, file, original); }
+	}
+	try {
+		const narrowed = structuredClone(metadata);
+		narrowed.handoff.flows[0].gates[0].surfaces = ["pr-review"];
+		putAt(fresh, ".omp/mosaic.json", JSON.stringify(narrowed));
+		putAt(fresh, ROSTER_PATH, roster.replace("surface: pr-review", "surface: tracker-reply"));
+		ok(doctor(fresh, 1).includes("prefers tracker-reply, which gate designer does not allow"));
+	} finally {
+		putAt(fresh, ".omp/mosaic.json", metadataText);
+		putAt(fresh, ROSTER_PATH, roster);
+	}
+	strictEqual(doctor(fresh, 0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+	const constantsPath = "tools/constants/handoff.ts", constants = readFileSync(join(fresh, constantsPath), "utf8");
+	try {
+		putAt(fresh, constantsPath, 'throw new Error("INSPECTED HANDOFF CODE EXECUTED");\n');
+		const result = Bun.spawnSync([bun, join(import.meta.dir, "../../kit/tools/doctor.ts"), "--root", fresh], { stdout: "pipe", stderr: "pipe" });
+		strictEqual(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
+		strictEqual(result.stdout.toString(), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+	} finally { putAt(fresh, constantsPath, constants); }
+	const guarded = Bun.spawnSync(["bash", ".claude/hooks/records-guard.sh"], {
+		cwd: fresh, env: { ...process.env, CLAUDE_PROJECT_DIR: fresh }, stdout: "pipe", stderr: "pipe",
+		stdin: Buffer.from(JSON.stringify({ tool_input: { file_path: join(fresh, ROSTER_PATH) } })),
+	});
+	strictEqual(guarded.exitCode, 0, guarded.stderr.toString());
+	ok(JSON.parse(guarded.stdout.toString()).hookSpecificOutput.additionalContext.includes("docs/process/records.md"));
+	const empty = join(scratch, "handoff-empty-roster");
+	writeFileSync(manifest, JSON.stringify({ ...settings, handoff: { flows: [{ id: "acceptance", gates: [{ role: "designer", surfaces: ["pr-review"] }] }] } }));
+	await install({ manifest, target: empty });
+	deepStrictEqual(parseRoster(readFileSync(join(empty, ROSTER_PATH), "utf8")), []);
+	ok(doctor(empty, 1).includes("no roster person holds role designer"));
+	const off = join(scratch, "handoff-monorepo-none-false");
+	try {
+		putAt(off, ROSTER_PATH, roster);
+		strictEqual(doctor(off, 0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+		putAt(off, "tools/handoff.ts", "export {};\n");
+		const output = doctor(off, 0);
+		ok(output.includes("WARN handoff tools/handoff.ts:") && output.includes("present without handoff metadata"), output);
+		ok(output.endsWith("doctor: 0 fail, 1 warn, 0 cannot-evaluate\n"), output);
+	} finally {
+		rmSync(join(off, "tools/handoff.ts"), { force: true });
+		rmSync(join(off, ROSTER_PATH), { force: true });
+	}
+	console.log("PASS handoff installer rejection, project roster preservation, empty template, doctor roster/preview/metadata drift and off-mode ownership warnings");
 }
 async function exerciseBraceScope(input: Record<string, unknown>): Promise<void> {
 	const fresh = join(scratch, "brace-scope");
@@ -1205,6 +1365,7 @@ try {
 	await exerciseStackAcceptance(input);
 	await exerciseSpecialistRepairs(input);
 	await exerciseSpecialists(input);
+	await exerciseHandoff(input);
 	await exerciseReviewRunners(input);
 	await exerciseBraceScope(input);
 	await exerciseFinalReviewRegressions(input);

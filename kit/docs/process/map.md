@@ -15,6 +15,9 @@ Read [the documentation index](../index.md) for project documents and [the archi
 | context-scout | Briefs a code/doc area with concepts, excerpts, and pointers |
 | stack-operator | Runs approved local-stack acceptance scenarios under the project's procedure |
 | Human | Approves plans, signs off results, owns overrides and hook escape decisions |
+{{HANDOFF}}
+| Acceptor | Named roster person who accepts or returns a reviewed change before the contributor merges |
+{{/HANDOFF}}
 ## Lifecycle
 `draft → approved → executing → review → done / abandoned`
 | Transition | Who flips | Where it lands |
@@ -39,6 +42,9 @@ It omits the plan doc and formal planning approvals; read `rule://plan-triage` f
 | Local-stack acceptance after task approvals and other Verification, before {{LANDING_PULL_REQUEST}}final review{{/LANDING_PULL_REQUEST}}{{LANDING_DIRECT}}sign-off{{/LANDING_DIRECT}} | `rule://stack-acceptance` |
 {{LANDING_PULL_REQUEST}}
 | Final open-PR review, replay, comments and exact-head CI | `rule://final-review` |
+{{HANDOFF}}
+| Select a plan's acceptance flow, request it after readiness, or verify the answer before merge | `rule://handoff` |
+{{/HANDOFF}}
 {{/LANDING_PULL_REQUEST}}
 | Verification, Unverified, durable evidence | `rule://verification` |
 | Route knowledge or change governed files | `rule://records` |

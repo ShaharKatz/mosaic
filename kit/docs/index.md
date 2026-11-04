@@ -10,6 +10,10 @@
 | [gaps-archive.md](gaps-archive.md) | Closed obligation evidence | Auditing a closed entry |
 | [plans/README.md](plans/README.md) | Master ledger for every repo | Reserving a number or locating a plan |
 | [plans/TEMPLATE.md](plans/TEMPLATE.md) | Plan schema | Authoring a plan |
+{{HANDOFF}}
+| [surfaces/people.md](surfaces/people.md) | Roster roles, verified identities and acceptance preferences | Choosing or verifying a plan's acceptor |
+| [handoff tool](../tools/handoff.ts) | Resolve flows/acceptors, check gate status, manage personal defaults | Planning or resuming acceptance; `/mosaic-onboard` |
+{{/HANDOFF}}
 {{DIAGRAMS_MERMAID}}
 | Diagram contract at `{{DIAGRAMS_ROOT}}/README.md` | Mermaid file/element contract, provenance, transitions | Editing or reviewing topology |
 | `diagrams` skill and `diagram-keeper` | Direct `.mmd` text editing and validated worktree evidence, no commits | A plan's last diagram task |
@@ -43,6 +47,9 @@
 | [review-loop](process/review-loop.md) | Verdicts and correction cycle | Reviewing tasks or findings |
 {{LANDING_PULL_REQUEST}}
 | [final-review](process/final-review.md) | Open-PR final review, replay, comments and exact-head CI | PR opens, head changes, readiness or merge |
+{{HANDOFF}}
+| [handoff](process/handoff.md) | Named acceptance before merge, evidence checks and returned-feedback repairs | Planning a flow or continuing final-review readiness |
+{{/HANDOFF}}
 {{/LANDING_PULL_REQUEST}}
 | [verification](process/verification.md) | Evidence and registry lifecycle | Writing/running verification or interpreting a failure |
 | [stack-acceptance](process/stack-acceptance.md) | Local-stack scenarios, keyless envelope and safety gates | Writing or running plan Verification |
