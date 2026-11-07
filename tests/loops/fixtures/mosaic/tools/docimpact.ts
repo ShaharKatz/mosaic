@@ -134,7 +134,7 @@ for (const [doc, content] of docs) {
 		}
 		if (matches.length) candidate(doc, "decision", `plan cites ${matches.join(", ")}`);
 	}
-	// Existing projects may keep PRDs without kit metadata; absence is unknown, not an empty match.
+	// Product skeleton fields are frontmatter-only; legacy PRDs without them stay unknown, never inferred from prose.
 	if (/(?:^|\/)docs\/(?:product|prd)\//.test(doc) && doc.endsWith(".md") && path.basename(doc) !== "README.md") {
 		const product = frontmatter(content);
 		const docContracts = strings(product?.contracts);

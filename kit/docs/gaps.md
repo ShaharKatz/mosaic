@@ -16,6 +16,9 @@ here (route per [records](process/records.md#record-routing)).
 
 Oversized entries split out to `docs/gaps/G-<n>-<slug>.md` and leave a one-line pointer here.
 
+Backtick file/glob targets; a root target needs an extension or glob (`package.json`, `*.json`).
+Extensionless root files need `./`: use `./Dockerfile` or `./Makefile`.
+
 ## Lifecycle
 
 Lifecycle mechanics are canonical in [verification](process/verification.md#registry-lifecycle).

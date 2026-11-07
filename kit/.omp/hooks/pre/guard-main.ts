@@ -1,5 +1,5 @@
 // tool_call(bash) adapter: block commits on the configured default branch.
-// The port-neutral resolver follows cwd changes and inline scripts in tools/guard-main.ts.
+// The shared resolver follows every commit target, including explicit git dirs and inline scripts.
 // Binds LLM sessions only — a human terminal is the escape hatch.
 // Landing policy lives in docs/process/git-flow.md, not in this commit guard.
 // tool_call payload: {"toolName":"bash","input":{"command":"git commit -m x","cwd":"/repo"}}
@@ -32,8 +32,8 @@ export default function (pi: HookAPI) {
 
 		// The bash tool runs the command in its `cwd` param; resolution must too.
 		const base = String(event.input.cwd ?? "") || ".";
-		const target = resolveTarget(cmd, base);
-		if (target === null) return; // not a git commit — nothing to guard
+		const targets = resolveTarget(cmd, base);
+		if (targets.length === 0) return; // not a git commit — nothing to guard
 		let defaultBranch: string;
 		try {
 			defaultBranch = await configuredBranch();
@@ -41,28 +41,28 @@ export default function (pi: HookAPI) {
 			return { block: true, reason: `Cannot read ${CONFIG_PATH}: ${String(error)}` };
 		}
 
-		// Fail-open: any error resolving the branch allows the command. The
-		// tool-wrapper treats a thrown hook as a block, so never let git errors
-		// escape (git missing, not a repo, detached HEAD, timeout, ...).
-		let branch = "";
-		try {
-			const { stdout } = await pi.exec("git", ["-C", target, "branch", "--show-current"], {
-				cwd: ctx.cwd,
-				timeout: 5000,
-			});
-			branch = stdout.trim();
-		} catch {
-			return;
+		// Fail open per unreadable branch, without skipping any later commit targets.
+		// The wrapper treats thrown hooks as blocks, so git errors must not escape.
+		for (const target of targets) {
+			const selector = target.kind === "git-dir" ? [`--git-dir=${target.path}`] : ["-C", target.path];
+			let branch = "";
+			try {
+				const { stdout } = await pi.exec("git", [...selector, "branch", "--show-current"], {
+					cwd: ctx.cwd,
+					timeout: 5000,
+				});
+				branch = stdout.trim();
+			} catch {
+				continue;
+			}
+			if (branch !== defaultBranch) continue;
+			return {
+				block: true,
+				reason:
+					`Direct commits to ${defaultBranch} are blocked in ${target.path} (docs/process/git-flow.md). Create a task branch in the target repo first:\n` +
+					`  git ${selector.join(" ")} checkout -b task/NNNN-<slug>   (branch name = plan filename in docs/plans/)\n` +
+					`Landing on ${defaultBranch}: follow docs/process/git-flow.md after review + human sign-off.`,
+			};
 		}
-
-		if (branch !== defaultBranch) return;
-
-		return {
-			block: true,
-			reason:
-				`Direct commits to ${defaultBranch} are blocked (docs/process/git-flow.md). Create a task branch in the target repo first:\n` +
-				`  git -C ${target} checkout -b task/NNNN-<slug>   (branch name = plan filename in docs/plans/)\n` +
-				`Landing on ${defaultBranch}: follow docs/process/git-flow.md after review + human sign-off.`,
-		};
 	});
 }

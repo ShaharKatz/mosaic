@@ -6,7 +6,7 @@ Read when: creating a branch, committing, or landing any change.
 - Run operations in the targeted repo (`git -C <repo>`); read `rule://plan-home` for repo selection and plan ownership.
 - One plan has `task/NNNN-<slug>`, matching its filename, created from up-to-date `{{DEFAULT_BRANCH}}` in every targeted repo{{LANDING_PULL_REQUEST}}, or its declared parent when stacked (`rule://stacked-prs`){{/LANDING_PULL_REQUEST}}; R6 in `rule://plan-home` assigns the artifacts to those branches.
 - Commit each completed task in its own repo as `NNNN-T<k>: <summary>`.
-- Never commit on {{DEFAULT_BRANCH}}. The `guard-main` hook blocks the targeted repo's commit, including `git -C <repo>`, `cd <repo> &&` anywhere in the command, `bash -c`, `$(…)`, and heredoc scripts; git aliases and scripts on disk are not inspected.
+- Never commit on {{DEFAULT_BRANCH}}. The `guard-main` hook checks every commit target, including wrapped commands, shell groups, `cd`/`pushd`, `git -C`, `env`/`sudo` directory changes, `--git-dir`/`GIT_DIR`, inline shells (including `dash -c`), `eval`, substitutions and heredoc scripts; it blocks if any target is on {{DEFAULT_BRANCH}}. `$VAR` values, git aliases, on-disk scripts and xargs-generated commands are not resolved.
 {{LANDING_DIRECT}}
 - After sign-off and terminal recording, refresh {{DEFAULT_BRANCH}}, rebase the branch onto its latest tip if it moved (`git rebase {{DEFAULT_BRANCH}} task/NNNN-<slug>`), then `git checkout {{DEFAULT_BRANCH}} && git merge --ff-only task/NNNN-<slug> && git push origin {{DEFAULT_BRANCH}}`; delete the landed branch.
 - The same rebase-first and `--ff-only` sequence lands short-lived inline/docs branches; read `rule://plan-triage` for their names and authorization.

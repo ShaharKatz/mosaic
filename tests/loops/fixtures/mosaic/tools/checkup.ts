@@ -307,15 +307,19 @@ function matchesTarget(target: string): boolean {
 	}
 	return false;
 }
-// A bare (unquoted) slash token is a path candidate only when it is shaped like one: an explicit relative or
-// absolute prefix, a glob, a file extension, or a first segment that exists as a directory in some repo root.
-// Prose such as `headed/GPU` or `either/or`, and the lone `/` between two backticked spans (`a`/`b`), never name
-// a trigger target; backticked tokens are always candidates.
+const fileOrGlob = /[*?{}\[\]]|\.[a-z0-9]+$/i;
+// Bare slash tokens need visible path shape; slash-separated prose and the separator between code spans do not qualify.
 function pathShaped(target: string): boolean {
 	if (!/[^/]/.test(target)) return false;
 	if (/^(?:\.{1,2}\/|\/)/.test(target) || target.includes("*") || /\.[a-z0-9]+$/i.test(target)) return true;
 	const first = target.split("/")[0]!;
 	return first !== "" && repos.some(repo => fs.existsSync(path.join(root, repo, first)));
+}
+function triggerTarget(target: string, quoted: boolean): boolean {
+	if (/^(?:[a-z][\w+.-]*:|\/\/)/i.test(target)) return false;
+	if (target.includes("/")) return /[^/]/.test(target) && (quoted || pathShaped(target));
+	// Extensionless root names need ./ to distinguish paths from code and record labels.
+	return quoted && !/\s/.test(target) && !/^(?:D\d+|(?:G|P|F|OQ)-[\w-]+)$/.test(target) && fileOrGlob.test(target);
 }
 for (const repo of repos) {
 	const file = `${repo ? `${repo}/` : ""}docs/gaps.md`;
@@ -330,7 +334,7 @@ for (const repo of repos) {
 		if (!id || !trigger) continue;
 		const targets = new Set([...trigger[1]!.matchAll(/`([^`]+)`|([^\s`<>"()]*\/[^\s`<>"()]*)/g)]
 			.map(match => ({ target: (match[1] ?? match[2]!).replace(/[.,;:]+$/, ""), quoted: match[1] !== undefined }))
-			.filter(({ target, quoted }) => target.includes("/") && !/^[a-z][\w+.-]*:\/\//i.test(target) && (quoted || pathShaped(target)))
+			.filter(({ target, quoted }) => triggerTarget(target, quoted))
 			.map(({ target }) => target));
 		const missing: string[] = [];
 		for (const target of targets) {

@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { install } from "../../kit/install.ts";
 import { BUNDLE_FILES, DIAGRAMS_ROOT, REPLACED_MODE_MESSAGE } from "../../kit/tools/constants/diagrams.ts";
 import { BUNDLE_FILES as ERD_FILES } from "../../kit/tools/constants/erd.ts";
@@ -1091,6 +1092,104 @@ async function exerciseReviewRunners(input: Record<string, unknown>): Promise<vo
 	console.log("PASS legacy manifests: no runner metadata, optional skills or schema; malformed new install fields refused");
 }
 
+async function exerciseRecordsGuard(): Promise<void> {
+	const aliases = mkdtempSync("/tmp/mosaic-records-");
+	const alias = join(aliases, "project");
+	symlinkSync(target, alias);
+	put("docs/process/guard-smoke.md", "# Existing governed file\n");
+	symlinkSync("guard-loop", join(target, "docs/process/guard-loop"));
+	try {
+		type Event = { toolName: string; input: Record<string, unknown> };
+		type Context = { cwd: string; sessionManager: { getSessionId(): string } };
+		type Result = { block?: boolean; reason?: string } | undefined;
+		let handle!: (event: Event, ctx: Context) => Result;
+		// The installed hook's root is selected at runtime through the symlink alias.
+		const { default: register } = await import(pathToFileURL(join(alias, ".omp/hooks/pre/records-guard.ts")).href);
+		register({ on: (_name: string, callback: typeof handle) => { handle = callback; } });
+		const physical = realpathSync(target);
+		const physicalAlias = `${realpathSync(aliases)}/project`;
+		const cases = [
+			["parent segment", target, `${target}/../target/docs/gaps.md`, true],
+			["dot segment", target, `${target}/./docs/process/guard-smoke.md`, true],
+			["symlink file root", target, `${alias}/docs/gaps.md`, true],
+			["symlink project root", alias, `${physical}/docs/gaps.md`, true],
+			["physical tmp alias", alias, `${physicalAlias}/docs/gaps.md`, true],
+			["relative path", alias, "docs/gaps.md", true],
+			["relative dot path", alias, "./docs/gaps.md", true],
+			["new file", alias, "docs/process/new.md", true],
+			["new parent with dot segments", alias, "docs/process/not-created/../new.md", true],
+			["outside project", alias, "/etc/hosts", false],
+			["prefix sibling", alias, `${target}-other/docs/gaps.md`, false],
+			["relative sibling", target, "../target-other/docs/gaps.md", false],
+			["ungoverned file", alias, "src/example.ts", false],
+			["unresolvable symlink", alias, "docs/process/guard-loop", false],
+		] as const;
+		for (const [name, root, file, expected] of cases) {
+			const claude = Bun.spawnSync(["bash", join(target, ".claude/hooks/records-guard.sh")], {
+				cwd: scratch, env: { ...process.env, CLAUDE_PROJECT_DIR: root },
+				stdin: Buffer.from(JSON.stringify({ tool_input: { file_path: file } })), stdout: "pipe", stderr: "pipe",
+			});
+			strictEqual(claude.exitCode, 0, `${name}: ${claude.stderr}`);
+			strictEqual(claude.stderr.toString(), "", name);
+			if (expected) {
+				const guidance = JSON.parse(claude.stdout.toString()).hookSpecificOutput;
+				strictEqual(guidance.hookEventName, "PreToolUse");
+				ok(guidance.additionalContext.includes("docs/process/records.md"), name);
+			} else strictEqual(claude.stdout.toString(), "", name);
+			for (const toolName of ["edit", "write"]) {
+				const ctx = { cwd: root, sessionManager: { getSessionId: () => `${name}-${toolName}` } };
+				const event = { toolName, input: { path: file } };
+				const result = handle(event, ctx);
+				strictEqual(Boolean(result?.block), expected, `${name}: omp ${toolName}`);
+				if (expected) {
+					ok(result?.reason?.includes("rule://records"), name);
+					strictEqual(handle(event, ctx), undefined, `${name}: retry proceeds`);
+				} else strictEqual(result, undefined, name);
+			}
+		}
+		for (const [name, event, expected] of [
+			["hashline single", { toolName: "edit", input: { input: "[docs/gaps.md#A1B2]\nPUT 1.=1:\n+# Updated gap\n" } }, true],
+			["hashline multi-section", { toolName: "edit", input: { input: "*** Begin Patch\n[src/example.ts#A1B2]\nPUT 1.=1:\n+export {};\n[docs/process/guard-smoke.md#C3D4]\nPUT 1.=1:\n+# Updated rule\n*** End Patch" } }, true],
+			["hashline move", { toolName: "edit", input: { input: "[notes.md#A1B2]\nMV docs/gaps.md\n" } }, true],
+			["hashline quoted move", { toolName: "edit", input: { input: '[notes.md#A1B2]\nMV "docs/process/new rule.md"\n' } }, true],
+			["hashline single-quoted move", { toolName: "edit", input: { input: "[notes.md#A1B2]\nMV 'docs/process/new rule.md'\n" } }, true],
+			["apply_patch update", { toolName: "apply_patch", input: { input: "*** Begin Patch\n*** Update File: docs/gaps.md\n@@\n-old\n+new\n*** End Patch" } }, true],
+			["apply_patch add", { toolName: "apply_patch", input: { input: "*** Begin Patch\n*** Add File: docs/process/new.md\n+# New rule\n*** End Patch" } }, true],
+			["apply_patch delete", { toolName: "apply_patch", input: { input: "*** Begin Patch\n*** Delete File: docs/gaps.md\n*** End Patch" } }, true],
+			["apply_patch move", { toolName: "apply_patch", input: { input: "*** Begin Patch\n*** Update File: notes.md\n*** Move to: docs/process/moved rule.md\n@@\n-old\n+new\n*** End Patch" } }, true],
+			["replace path", { toolName: "edit", input: { path: "docs/gaps.md", old_string: "old", new_string: "new" } }, true],
+			["write path", { toolName: "write", input: { path: "docs/process/new.md", content: "# New rule\n" } }, true],
+			["ungoverned hashline", { toolName: "edit", input: { input: "[src/example.ts#A1B2]\nPUT 1.=1:\n+export {};\n" } }, false],
+			["quoted envelope content", { toolName: "edit", input: { input: "[notes.md#A1B2]\nPUT >1:\n+[docs/gaps.md#C3D4]\n+MV docs/process/new.md\n+*** Update File: docs/gaps.md\n" } }, false],
+			["ungoverned apply_patch", { toolName: "apply_patch", input: { input: "*** Begin Patch\n*** Add File: src/example.ts\n+export {};\n*** End Patch" } }, false],
+		] as const) {
+			const ctx = { cwd: alias, sessionManager: { getSessionId: () => `payload-${name}` } };
+			const result = handle(event, ctx);
+			strictEqual(Boolean(result?.block), expected, name);
+			strictEqual(handle(event, ctx), undefined, `${name}: retry or ungoverned edit proceeds`);
+		}
+		console.log("PASS records-guard payloads: hashline single/multi/MV, apply_patch Add/Update/Delete/Move, replace/write paths; ungoverned edits and body text silent");
+		const session = { getSessionId: () => "multi-file" };
+		const multi = { toolName: "edit", input: { paths: ["src/example.ts", "docs/gaps.md"] } };
+		ok(handle(multi, { cwd: alias, sessionManager: session })?.block, "any governed file prompts");
+		strictEqual(handle({ toolName: "write", input: { path: "docs/process/new.md" } }, { cwd: alias, sessionManager: session }), undefined, "one reminder across tool calls");
+		ok(handle({ toolName: "edit", input: { path: "gaps.md" } }, {
+			cwd: join(alias, "docs"), sessionManager: { getSessionId: () => "subdirectory" },
+		})?.block, "omp relative paths use the tool cwd");
+		const rule = join(target, ".omp/rules/records-guard.md");
+		const failing = { cwd: alias, sessionManager: { getSessionId: () => "missing-rule" } };
+		rmSync(rule);
+		try { strictEqual(handle(multi, failing), undefined, "unreadable rule fails open"); }
+		finally { symlinkSync("../../docs/process/records-guard.md", rule); }
+		ok(handle(multi, failing)?.block, "failed reminder does not consume the session reminder");
+		console.log("PASS records-guard §3: both ports canonicalize dot/parent/symlink/tmp aliases and new paths; outside/prefix siblings silent; per-session retry and fail-open");
+	} finally {
+		rmSync(aliases, { recursive: true, force: true });
+		rmSync(join(target, "docs/process/guard-smoke.md"));
+		rmSync(join(target, "docs/process/guard-loop"));
+	}
+}
+
 try {
 	writeFileSync(manifest, JSON.stringify({
 		project: { name: "Monorepo", summary: "Monorepo contains an API and worker." },
@@ -1893,6 +1992,8 @@ try {
 	rmSync(join(target, reviewPlan));
 	console.log("PASS both lint ports: whole-line required headings, attributed findings, exact later round counts, merged reviewer rejection, docs/code classes");
 
+	await exerciseRecordsGuard();
+
 	const gaps = readFileSync(join(target, "docs/gaps.md"), "utf8");
 	const gapBody = (trigger: string) => [
 		"- **G-999 · Recheck the runbooks**", `  when: ${trigger}`,
@@ -1947,6 +2048,31 @@ try {
 	deepStrictEqual(triggered.findings.filter((finding: { class: string }) => finding.class === "stale-trigger").map((finding: { path: string; detail: string }) => [finding.path, finding.detail.split(" ")[0]]), [["docs/gaps.md", "G-999"]]);
 	console.log("PASS monorepo root stale-trigger evaluation");
 
+	for (const [trigger, present, missing] of [
+		["`package.json`", "", true], ["`*.json`", "", true],
+		["`package.json`", "package.json", false], ["`*.json`", "package.json", false],
+		["`config?.json`", "", true], ["`config?.json`", "config1.json", false],
+		["`config[ab]`", "", true], ["`config{a,b}`", "configb", false],
+		["`bun test`", "", false], ["`foo()`", "", false], ["`bun package.json`", "", false],
+		["`https://example.invalid/package.json`", "", false], ["`mailto:ops@example.invalid`", "", false],
+		["`G-12` / `D3` / `P-x` / `F-x` / `OQ-n`", "", false],
+		["`Dockerfile`", "", false], ["`Makefile`", "", false],
+		["`./Dockerfile`", "", true], ["`./Makefile`", "Makefile", false],
+		["package.json", "", false], ["*.json", "", false],
+		["Should this run on CI/CD?", "", false], ["and/or?", "", false],
+	] as const) {
+		if (present) put(present, "{}\n");
+		put("docs/gaps.md", `${gaps}\n${gapBody(`${trigger} is added`)}`);
+		const result = JSON.parse(run([bun, "tools/checkup.ts", "--json"], 1));
+		deepStrictEqual(result.cannotEvaluate, [], trigger);
+		strictEqual(result.findings.some((finding: { class: string; detail: string }) =>
+			finding.class === "stale-trigger" && finding.detail.startsWith("G-999 ")), missing, trigger);
+		run([bun, "tools/lint-ledgers.ts", "docs/gaps.md"], 0);
+		if (present) rmSync(join(target, present));
+	}
+	put("docs/gaps.md", gaps);
+	console.log("PASS checkup triggers §4: root files/globs found or stale; commands/URLs/ids ignored; extensionless names need ./; bare roots ignored; lint shape agrees");
+
 	writeFileSync(join(scratch, "outside"), "outside the installed root\n");
 	put("proof/inside", "inside the installed root\n");
 	symlinkSync(join(scratch, "outside"), join(target, "proof/escape"));
@@ -1972,19 +2098,31 @@ try {
 	put("docs/gaps.md", gaps);
 	console.log("PASS trigger prose: bare slash words ignored; path-shaped bare tokens evaluated");
 
-	put("impact.md", "---\nplan: 0001\nrepo: link-repo\nareas: [contract:export_rows]\n---\n# Impact probe\n");
-	put("docs/prd/legacy.md", "# Existing PRD without metadata\n");
-	put("docs/product/partial.md", "---\ncontracts: [export_rows]\n---\n# Missing repo metadata\n");
-	put("docs/product/valid.md", "---\ncontracts: [export_rows]\nrepos: [link-repo]\n---\n# Export feature\n");
+	const skeleton = /```yaml\n(---\n[\s\S]*?\n---)\n```/.exec(readFileSync(join(target, "docs/product/README.md"), "utf8"))?.[1];
+	ok(skeleton, "product skeleton supplies copyable frontmatter");
+	const contract = Bun.YAML.parse(skeleton.split("---")[1]!).contracts[0];
+	put("impact.md", `---\nplan: 0001\nrepo: link-repo\nareas: [contract:${contract}]\n---\n# Impact probe\n`);
+	const products = [
+		["docs/product/skeleton.md", `${skeleton}\n# Export feature\nStatus: shipped · Actors: caller, API\n\n## Flow\n1. The caller exports rows through the API.\n`, "candidate"],
+		["docs/prd/legacy.md", "# Existing PRD without metadata\n", "unavailable"],
+		["docs/product/partial.md", `---\ncontracts: [${contract}]\n---\n# Missing repo metadata\n`, "unavailable"],
+		["docs/product/no-contracts.md", "---\nrepos: [link-repo]\n---\n# Missing contract metadata\n", "unavailable"],
+		["docs/product/prose-only.md", `# Prose is not frontmatter\nrepos: [link-repo]\ncontracts: [${contract}]\n`, "unavailable"],
+		["docs/product/unrelated.md", `---\nrepos: [link-repo]\ncontracts: [other_contract]\n---\n# Unrelated metadata\nProse mentions ${contract}.\n`, "none"],
+		["docs/product/no-public-contracts.md", "---\nrepos: [link-repo]\ncontracts: []\n---\n# No public contracts\n", "none"],
+	] as const;
+	for (const [file, body] of products) put(file, body);
 	const impact = JSON.parse(run([bun, "tools/docimpact.ts", "impact.md"], 0));
-	deepStrictEqual(impact.candidates.filter((candidate: { class: string }) => candidate.class === "product-contract").map((candidate: { doc: string }) => candidate.doc), ["docs/product/valid.md"]);
+	const productCandidates = impact.candidates.filter((candidate: { class: string }) => candidate.class === "product-contract");
 	const unknownProducts = impact.cannotEvaluate.filter((entry: { class: string }) => entry.class === "product-contract");
-	deepStrictEqual(unknownProducts.map((entry: { reason: string }) => entry.reason.split(":")[0]), [
-		"docs/prd/legacy.md", "docs/product/labels.md", "docs/product/partial.md",
-	]);
-	ok(unknownProducts.every((entry: { reason: string }) => entry.reason.includes("repos")));
-	ok(unknownProducts.slice(0, 2).every((entry: { reason: string }) => entry.reason.includes("contracts")));
-	console.log("PASS docimpact: metadata-free product/PRD documents are unknown, not empty success");
+	deepStrictEqual(productCandidates.map((candidate: { doc: string }) => candidate.doc), ["docs/product/skeleton.md"]);
+	for (const [file, , expected] of products) {
+		strictEqual(productCandidates.some((entry: { doc: string }) => entry.doc === file), expected === "candidate", file);
+		strictEqual(unknownProducts.some((entry: { reason: string }) => entry.reason.startsWith(`${file}:`)), expected === "unavailable", file);
+	}
+	deepStrictEqual(unknownProducts.map((entry: { reason: string }) => entry.reason.split(":")[0]),
+		["docs/product/labels.md", ...products.filter(([, , state]) => state === "unavailable").map(([file]) => file)].sort());
+	console.log("PASS docimpact §5: copied feature skeleton is a contract candidate; absent/partial/prose-only metadata unavailable; explicit empty/unrelated contracts are not candidates");
 } finally {
 	rmSync(scratch, { recursive: true, force: true });
 }

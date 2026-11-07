@@ -389,7 +389,7 @@ function agentFiles(port: ".omp" | ".claude"): string[] {
 }
 const harnessFiles = [
 	...ompRules, ...([".omp", ".claude"] as const).flatMap(port => [...skillFiles(port), ...agentFiles(port)]),
-	".omp/config.yml", ".omp/hooks/pre/guard-main.ts", ".omp/hooks/post/lint-ledgers.ts",
+	".omp/config.yml", ".omp/hooks/pre/guard-main.ts", ".omp/hooks/pre/records-guard.ts", ".omp/hooks/post/lint-ledgers.ts",
 	".claude/settings.json", ".claude/rules/mosaic-core.md", ".claude/rules/records-guard.md",
 	".claude/hooks/guard-main.sh", ".claude/hooks/lint-ledgers.sh", ".claude/hooks/records-guard.sh",
 ];
@@ -703,18 +703,18 @@ function compareGlobs(expected: Set<string>, actual: Set<string>, file: string):
 }
 const guard = text("governed-guard", "docs/process/records-guard.md");
 const guardTwin = text("governed-guard", ".claude/rules/records-guard.md");
-const guardHook = text("governed-guard", ".claude/hooks/records-guard.sh");
-if (guard !== undefined && guardTwin !== undefined && guardHook !== undefined) {
+const guardTool = text("governed-guard", "tools/records-guard.ts");
+if (guard !== undefined && guardTwin !== undefined && guardTool !== undefined) {
 	const scope = /^scope:\s*(.*)$/m.exec(frontmatter(guard))?.[1] ?? "";
 	const expected = new Set([...scope.matchAll(/tool:(?:edit|write)\(([^)]+)\)/g)].map(match => match[1]!));
 	if (expected.size === 0) finding("FAIL", "governed-guard", "docs/process/records-guard.md", "scope contains no edit/write globs");
 	const paths = /(?:^|\n)paths:[ \t]*(\[[^\n]*\]|(?:\n[ \t]+-[^\n]*)*)/.exec(frontmatter(guardTwin))?.[1] ?? "";
 	const listed = paths.startsWith("[") ? paths.slice(1, -1).split(",") : paths.split("\n").map(line => line.replace(/^\s*-\s*/, ""));
 	const twinGlobs = new Set(listed.map(glob => glob.trim().replace(/^(["'])(.*)\1$/, "$2")).filter(Boolean));
-	const hookList = /^governed_globs=\([ \t]*\n([\s\S]*?)^\)/m.exec(guardHook)?.[1] ?? "";
-	const hookGlobs = new Set([...hookList.matchAll(/["']([^"'\n]+)["']/g)].map(match => match[1]!));
+	const globList = /^export const GOVERNED_GLOBS = \[[ \t]*\n([\s\S]*?)^\]/m.exec(guardTool)?.[1] ?? "";
+	const toolGlobs = new Set([...globList.matchAll(/["']([^"'\n]+)["']/g)].map(match => match[1]!));
 	compareGlobs(expected, twinGlobs, ".claude/rules/records-guard.md");
-	compareGlobs(expected, hookGlobs, ".claude/hooks/records-guard.sh");
+	compareGlobs(expected, toolGlobs, "tools/records-guard.ts");
 }
 
 // Canonicalize existing ancestors while retaining the suffix of a not-yet-created data folder.

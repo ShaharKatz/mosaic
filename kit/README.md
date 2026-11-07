@@ -279,7 +279,7 @@ For example:
 ```
 
 Each selected standard installs canonical `docs/standards/<name>.md` plus short ordinary scoped rules
-in both ports: Claude `paths:` and omp edit/write `scope`, following records-guard's runtime idioms.
+in both ports: Claude `paths:` and omp edit/write `scope` with a TTSR condition.
 Only selected standards get an index row and runtime metadata. Missing/empty list installs nothing.
 Testing points to the project's stack commands and leaves a project-owned **Surfaces** section empty.
 Merge an equivalent existing project standard, move it losslessly to `docs/standards/<name>.md`,
@@ -396,7 +396,7 @@ Run these from the installed project root:
 | `bun tools/doctor.ts` | Harness structural checks; exit 0 / 1 / 2 means pass / fail / cannot evaluate |
 | `bun tools/checkup.ts --json` | Lint, doctor, and document/plan/trigger drift sweep |
 | `bun tools/docimpact.ts <plan-path>` | Document-impact candidates to inspect, not automatic edit instructions |
-| `bun tools/guard-main.ts` | Shared commit-target resolver for both guard adapters; JSON stdin → target path or `SKIP`; `--hook` checks Claude hook payloads |
+| `bun tools/guard-main.ts` | Shared commit-target resolver for both guard adapters; JSON stdin → JSON-lines directory/git-dir targets or `SKIP` ([contract](docs/kit/maintenance.md)); `--hook` checks every target in Claude hook payloads |
 | `tools/tracker.ts` (`local` only) | Offline inventory/intent operations; commands and safety gates live in the [tracker rule](docs/process/tracker.md) |
 | `bun tools/stack-base.ts --repo <name> [--plan <path>]` (pull-request only) | Read-only repository-scoped stacked-base resolution; [procedure](docs/process/stacked-prs.md), ordered protocol and exit contract |
 | `bun .omp/hooks/post/lint-ledgers.ts <path>` | Governed registry/plan lint when using omp |

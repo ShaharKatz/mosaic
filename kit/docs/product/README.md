@@ -22,13 +22,28 @@ One doc per **flow or feature**, numbered `F-NN` (greppable as `F-01`). Record p
 features here regardless of topology; use an agreed milestone directory when applicable, but no
 milestone is required to start a feature doc. Skeleton:
 
-- **Header block**: Status · Actors · Areas touched (repositories or components)
+- **Header block**: Status · Actors
+- **Frontmatter `repos:`** — nonempty YAML list of repository names, matching plan `repo:` values (`link-repo` for a monorepo; member names for independent repos). This is the sole list of areas touched; component detail belongs in the flow.
+- **Frontmatter `contracts:`** — YAML list of public contract names, without the `contract:` prefix; names match plan `areas: [contract:<name>]`. Use `[]` when there are no public contracts.
 - **Frontmatter `verified:`** — `"yes"` when current evidence supports the Status value, or `"no — see open question OQ-<n>"` naming the open question that holds the contradiction. Verification is distinct from status: shipped never implies checked live.
 - **Flow** — numbered steps across actors and areas
 - **Decisions inherited** — links to the D-numbers this flow builds on
 - **Feature-scoped decisions** — small-caliber choices that don't warrant a D-number
 - **Open questions** — hoisted to [open-questions.md](../architecture/open-questions.md) when cross-cutting
 - **MVP boundary** — explicitly in / out / suspended
+
+Start the doc with frontmatter, for example:
+
+```yaml
+---
+repos: [link-repo]
+contracts: [export_rows]
+verified: "yes"
+---
+```
+
+`docimpact` uses only frontmatter for product-contract candidates, never the header prose. A matching contract
+names a candidate; a doc missing `repos:` or `contracts:` remains `unavailable`, including existing PRDs.
 
 ### Status lifecycle
 
