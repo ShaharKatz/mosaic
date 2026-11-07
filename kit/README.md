@@ -190,7 +190,9 @@ Optional nonempty single-line `when` describes when to suggest a flow; `resolve`
 unselected flows with conditions as `suggestions: [{id,when}]`. Planning considers matches and
 names their gates in the approval brief; the human decides, never automatic selection.
 `tracker-reply` needs local replay or MCP tracking; `pr-review` uses GitHub. Without tracking,
-only PR reviews are available. Gate `state` is optional and MCP-only; verify the team has it.
+only PR reviews are available. Gate `state` is optional and MCP-only; when configured, verify the
+team has it before setting it. Without it, record managed last-event `handoff` and the request
+comment while preserving the current native tracker state; local replay still emits its `handoff` event.
 Artifacts default to `["pr"]`; including `preview` requires a project-owned card at `preview`.
 `requestReview` defaults to true. Set false only when the owner attests that requesting a GitHub
 review triggers a tracker state change; the tracker mention is then the notification. A
@@ -237,8 +239,10 @@ key outside all checkouts. Self mode writes them from the roster branch, effecti
 rerun if the reviewer changes the row. `bun tools/handoff.ts user` shows path, validity and settings.
 `bun tools/handoff.ts status --plan <path>` validates archived Execution-log lines: exit 0 means
 no gates or all cleared, 1 means pending, 2 means cannot-evaluate. Recorded acceptance must
-still hold on the reviewed head immediately before merge. Returned feedback is classified as
-defect, amendment or deferral and repaired through the existing review route, not a reopened plan.
+still hold on the reviewed head immediately before merge. Later returned feedback by the same
+acceptor supersedes an ACCEPTED in the same round: append RETURNED without removing history;
+the gate is pending until a new round clears. Classify feedback as defect, amendment or deferral
+and repair through the existing review route, not a reopened plan.
 Omitting `handoff` installs none of its files or conditional callers. Later switches use the
 same reviewed scratch-render comparison as tracking/landing and preserve historical records.
 

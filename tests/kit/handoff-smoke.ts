@@ -214,6 +214,13 @@ try {
 		r.handoff.flows[0]!.gates[0]!.state = "QA"; r.config(r.handoff, "mcp"); r.plan({ flow: "design-acceptance" });
 		eq(r.command(["resolve", "--plan", PLAN]).gates[0].state, "QA");
 	});
+	test("MCP gate without native state resolves without inventing one", r => {
+		r.user({}); r.config(r.handoff, "mcp"); r.plan({ flow: "design-acceptance" });
+		const result = r.command(["resolve", "--plan", PLAN]);
+		eq(result.flow, "design-acceptance");
+		eq(Object.hasOwn(result.gates[0], "state"), false);
+		same(result.gates[0].post, ["tracker-reply", "pr-review"]);
+	});
 	test("roster filters by role", r => {
 		same(r.command(["roster", "--role", "designer"]).map((person: { handle: string }) => person.handle), ["@dana"]);
 		same(r.command(["roster", "--role", "unknown"]), []);
@@ -512,6 +519,45 @@ mock.module("node:fs", () => ({ ...fs, writeFileSync(file, data, ...options) {
 	test("returned findings remain pending", r => {
 		r.plan({ flow: "design-acceptance" }, `${requested()}\n${returned}\n${findings}`); const result = r.command(["status", "--plan", PLAN], 1);
 		eq(result.gates[0].state, "returned"); eq(result.gates[0].returnedRounds, 1); eq(result.gates[0].locator, "tracker-reply/return-1"); eq(result.cleared, false);
+	});
+	test("returned feedback supersedes same-round acceptance without rewriting its journal", r => {
+		const file = "docs/plans/archived/0042-handoff.md";
+		r.plan({ flow: "design-acceptance", status: "done" }, `${requested()}\n${accepted()}\n${returned}\n${findings}`, file);
+		const before = readFileSync(join(r.root, file), "utf8");
+		const result = r.command(["status", "--plan", file], 1), gate = result.gates[0];
+		eq(result.cleared, false); eq(gate.state, "returned"); eq(gate.round, 1);
+		eq(gate.returnedRounds, 1); eq(gate.acceptor, "@dana"); eq(gate.acceptedHead, null);
+		eq(gate.locator, "tracker-reply/return-1");
+		eq(readFileSync(join(r.root, file), "utf8"), before);
+	});
+	test("new round clears after accepted feedback was returned", r => {
+		r.plan({ flow: "design-acceptance" }, `${requested()}\n${accepted()}\n${returned}\n${findings}\n${requested("designer", "@dana", 2, NEXT_HEAD)}\n${accepted("designer", "@dana", 2, NEXT_HEAD)}`);
+		const result = r.command(["status", "--plan", PLAN]), gate = result.gates[0];
+		eq(result.cleared, true); eq(gate.state, "accepted"); eq(gate.round, 2);
+		eq(gate.returnedRounds, 1); eq(gate.acceptedHead, NEXT_HEAD); eq(gate.locator, "tracker-reply/accept-2");
+	});
+	test("duplicate acceptance in a cleared round remains invalid", r => {
+		r.plan({ flow: "design-acceptance" }, `${requested()}\n${accepted()}\n${accepted()}`);
+		r.command(["status", "--plan", PLAN], 2, /R1 for designer is not open/);
+	});
+	test("another role holder cannot return the acceptor's cleared round", r => {
+		r.put("docs/surfaces/people.md", ROSTER + LEE);
+		r.plan({ flow: "design-acceptance" }, `${requested()}\n${accepted()}\n${returned.replace("@dana", "@lee")}\n${findings}`);
+		r.command(["status", "--plan", PLAN], 2, /@lee is not the requested acceptor @dana/);
+	});
+	test("return after acceptance still requires an allowed surface", r => {
+		r.handoff.flows[0]!.gates[0]!.surfaces = ["pr-review"]; r.config();
+		r.plan({ flow: "design-acceptance" }, `${requested()}\n${accepted().replace("tracker-reply/", "pr-review/")}\n${returned}\n${findings}`);
+		r.command(["status", "--plan", PLAN], 2, /does not accept answers on tracker-reply/);
+	});
+	test("return after acceptance still requires the acceptor's surface identity", r => {
+		r.put("docs/surfaces/people.md", ROSTER.replace("dana-id | @Dana Levi", "— | @Dana Levi"));
+		r.plan({ flow: "design-acceptance" }, `${requested()}\n${accepted().replace("tracker-reply/", "pr-review/")}\n${returned}\n${findings}`);
+		r.command(["status", "--plan", PLAN], 2, /@dana has no roster identity on tracker-reply/);
+	});
+	test("return after acceptance still requires its declared findings", r => {
+		r.plan({ flow: "design-acceptance" }, `${requested()}\n${accepted()}\n${returned}`);
+		r.command(["status", "--plan", PLAN], 2, /RETURNED finding count mismatch/);
 	});
 	for (const log of [returned, `${returned}\n${findings}\n- handoff R1 designer: S — Extra finding → fixed`]) test(`status refuses mismatched returned count: ${log.includes("Extra") ? "extra" : "missing"}`, r => {
 		r.plan({ flow: "design-acceptance" }, `${requested()}\n${log}`); r.command(["status", "--plan", PLAN], 2, /finding count mismatch|finding without an open RETURNED count/);

@@ -524,7 +524,7 @@ export function gateStatuses(log: string, flow: Flow, people: Person[]): GateSta
 		}
 		if (round !== status.round || status.round === 0) throw new Error(`${where}: no request R${round} for ${role}`);
 		if (kind === "accepted" || kind === "returned") {
-			if (status.state !== "requested") throw new Error(`${where}: R${round} for ${role} is not open`);
+			if (status.state !== "requested" && !(kind === "returned" && status.state === "accepted")) throw new Error(`${where}: R${round} for ${role} is not open`);
 			if (match[3] !== status.acceptor) throw new Error(`${where}: ${match[3]} is not the requested acceptor ${status.acceptor}`);
 			const surface = match[5] as Surface;
 			const person = people.find(entry => entry.handle === status.acceptor)!;
@@ -539,7 +539,7 @@ export function gateStatuses(log: string, flow: Flow, people: Person[]): GateSta
 			}
 			const count = Number(match[7]);
 			if (!count) throw new Error(`${where}: RETURNED needs at least one finding`);
-			status.state = "returned";
+			Object.assign(status, { state: "returned", acceptedHead: null });
 			status.returnedRounds += 1;
 			pendingFindings.set(key, count);
 			continue;
