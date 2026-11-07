@@ -15,6 +15,7 @@ export const GOVERNED_GLOBS = [
 	".omp/**",
 	".claude/**",
 	"docs/process/**",
+	"docs/surfaces/**",
 ] as const;
 const governed = GOVERNED_GLOBS.map(pattern => new Bun.Glob(pattern));
 

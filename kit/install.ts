@@ -10,6 +10,8 @@ import { validateRunner, validateTesting } from "./tools/constants/codex-review.
 import type { Runner, TestEntry } from "./tools/constants/codex-review.ts";
 import { BUNDLE_FILES as ERD_FILES, validateErd } from "./tools/constants/erd.ts";
 import type { Erd } from "./tools/constants/erd.ts";
+import { parseRoster, previewCardErrors, ROSTER_PATH, rosterErrors, validateHandoff } from "./tools/constants/handoff.ts";
+import type { Handoff } from "./tools/constants/handoff.ts";
 
 type Member = { name: string; path: string; stack: string; testCommand: string; coverageNote: string; testRunner?: Runner };
 type Tracking = { mode: "none" | "local" | "mcp"; mcp?: { server: string; team?: string; queue?: string } };
@@ -30,6 +32,7 @@ type Manifest = {
   components: Member[];
   standards?: Standard[];
   review?: Review;
+  handoff?: Handoff;
   rootTest?: { testCommand: string; testRunner: Runner };
 };
 type Entry = { kind: "directory"; mode: number } | { kind: "file"; mode: number; content: Buffer }
@@ -76,6 +79,8 @@ function manifestFrom(value: unknown): Manifest {
     if (landing.mode !== "pull-request") throw new Error("landing.closeOut is only valid in pull-request mode");
     if (landing.closeOut !== "two-commit") throw new Error("landing.closeOut must be two-commit");
   }
+  const handoff = value.handoff === undefined ? undefined
+    : validateHandoff(value.handoff, { landing: landing.mode, tracking: tracking.mode });
   let diagrams: Manifest["diagrams"];
   if (value.diagrams !== undefined) {
     if (record(value.diagrams) && value.diagrams.mode === REPLACED_MODE) throw new Error(REPLACED_MODE_MESSAGE);
@@ -195,6 +200,7 @@ function manifestFrom(value: unknown): Manifest {
     members: value.members as Member[], components: components as Member[],
     ...(value.standards !== undefined ? { standards: value.standards as Standard[] } : {}),
     ...(review?.specialists.length ? { review } : {}),
+    ...(handoff ? { handoff } : {}),
     ...(value.rootTest !== undefined ? { rootTest: value.rootTest as Manifest["rootTest"] } : {}),
   };
 }
@@ -299,9 +305,10 @@ function render(content: string, file: string, manifest: Manifest): string {
       (_match, body: string) => manifest.diagrams?.erd ? body : "")
     .replace(/\{\{(MULTI_REPO|MONOREPO)\}\}([\s\S]*?)\{\{\/\1\}\}/g,
       (_match, topology: string, body: string) => topology === (manifest.topology === "monorepo" ? "MONOREPO" : "MULTI_REPO") ? body : "")
-    .replace(/^\{\{(PR_EVIDENCE|SPECIALISTS|FRONTEND_REVIEW)\}\}\n([\s\S]*?)^\{\{\/\1\}\}\n?/gm,
+    .replace(/^\{\{(PR_EVIDENCE|SPECIALISTS|FRONTEND_REVIEW|HANDOFF)\}\}\n([\s\S]*?)^\{\{\/\1\}\}\n?/gm,
       (_match, mode: string, body: string) => (mode === "PR_EVIDENCE" ? evidenceSelected
         : mode === "SPECIALISTS" ? manifest.review?.specialists.length
+        : mode === "HANDOFF" ? manifest.handoff
         : manifest.review?.specialists.some(entry => entry.agent === "frontend-reviewer")) ? body : "");
   const result = selected.replace(/\{\{([^{}]+)\}\}/g, (_match, token: string) => {
     switch (token) {
@@ -384,6 +391,12 @@ export async function install(options: { manifest: string; target: string; kit?:
   if (evidenceSelected) await collect(source, [".github/pull_request_template.md"], entries, manifest);
   // Overlays remain complete replacements, but cannot enable files excluded by the selected mode.
   if (overlay) await collect(overlay, (await readdir(overlay)).sort(), entries);
+  if (!manifest.handoff) {
+    const excluded = ["docs/process/handoff.md", ".omp/rules/handoff.md", ROSTER_PATH,
+      "tools/handoff.ts", "tools/constants/handoff.ts", ".omp/skills/mosaic-onboard", ".claude/skills/mosaic-onboard"];
+    for (const name of entries.keys()) if (excluded.some(file => name === file || name.startsWith(`${file}/`))) entries.delete(name);
+    if (![...entries.keys()].some(name => name.startsWith("docs/surfaces/"))) entries.delete("docs/surfaces");
+  }
   if (manifest.landing.mode !== "pull-request") {
     entries.delete("docs/process/final-review.md");
     entries.delete(".omp/rules/final-review.md");
@@ -391,7 +404,7 @@ export async function install(options: { manifest: string; target: string; kit?:
   if (manifest.diagrams?.mode !== MODE) {
     const excluded = [...BUNDLE_FILES, "docs/architecture/diagrams"];
     for (const name of entries.keys()) if (excluded.some(p => name === p || name.startsWith(p + "/"))
-      || name === ".omp/skills/diagrams" || name === ".claude/skills/diagrams" || (name === "tools/constants" && !testingFor(manifest))) entries.delete(name);
+      || name === ".omp/skills/diagrams" || name === ".claude/skills/diagrams" || (name === "tools/constants" && !testingFor(manifest) && !manifest.handoff)) entries.delete(name);
   } else if (manifest.diagrams.root !== DIAGRAMS_ROOT) {
     for (const [name, entry] of [...entries]) if (name === DIAGRAMS_ROOT || name.startsWith(DIAGRAMS_ROOT + "/")) {
       const destination = manifest.diagrams.root! + name.slice(DIAGRAMS_ROOT.length);
@@ -446,7 +459,7 @@ export async function install(options: { manifest: string; target: string; kit?:
     for (const name of entries.keys()) {
       if (/^(?:\.omp|\.claude)\/skills\/review-with-codex(?:\/|$)/.test(name)
         || name === "tools/codex-review-schema.json" || name === "tools/codex-review-harness.ts"
-        || name === "tools/constants/codex-review.ts" || (name === "tools/constants" && manifest.diagrams?.mode !== MODE)) entries.delete(name);
+        || name === "tools/constants/codex-review.ts" || (name === "tools/constants" && manifest.diagrams?.mode !== MODE && !manifest.handoff)) entries.delete(name);
     }
   }
   for (const name of entries.keys()) {
@@ -457,7 +470,7 @@ export async function install(options: { manifest: string; target: string; kit?:
       && !specialists.some(entry => entry.agent === "frontend-reviewer")) entries.delete(name);
     if (name === "tools/specialists.ts" && !specialists.length) entries.delete(name);
   }
-  async function agentFile(file: string, seen = new Set<string>()): Promise<boolean> {
+  async function installedFile(file: string, seen = new Set<string>()): Promise<boolean> {
     if (seen.has(file)) return false;
     seen.add(file);
     const destination = join(target, file);
@@ -473,12 +486,42 @@ export async function install(options: { manifest: string; target: string; kit?:
     if (entry?.kind === "file") return true;
     if (entry?.kind !== "symlink") return false;
     const resolved = resolve(target, dirname(file), entry.target);
-    return contains(target, resolved) && agentFile(relative(target, resolved), seen);
+    return contains(target, resolved) && installedFile(relative(target, resolved), seen);
+  }
+  if (manifest.handoff) {
+    async function projectFile(file: string): Promise<{ content: string; fromOverlay: boolean } | undefined> {
+      const fromOverlay = Boolean(overlay && await existing(join(overlay, file)));
+      const base = fromOverlay ? overlay! : target;
+      if (!fromOverlay && !(await existing(join(target, file)))) return undefined;
+      let real: string | null;
+      try { real = realpathWithinRoot(base, join(base, file)); }
+      catch { throw new Error(`Missing handoff project file: ${file}`); }
+      if (!real || !(await lstat(real)).isFile()) throw new Error(`Handoff project file is not a contained file: ${file}`);
+      return { content: await readFile(real, "utf8"), fromOverlay };
+    }
+    const roster = await projectFile(ROSTER_PATH);
+    if (roster) {
+      const errors = rosterErrors(parseRoster(roster.content), manifest.handoff);
+      if (errors.length) throw new Error(`Invalid handoff roster ${ROSTER_PATH}: ${errors.join("; ")}`);
+      // The kit's empty template never overwrites the project's people, even under --force.
+      if (!roster.fromOverlay) entries.delete(ROSTER_PATH);
+    }
+    if (manifest.handoff.preview) {
+      const file = manifest.handoff.preview;
+      const preview = await projectFile(file);
+      if (!preview) throw new Error(`Missing handoff preview card: ${file}`);
+      if (entries.has(file) && !preview.fromOverlay) throw new Error(`Handoff preview card must be project-owned, not a kit replacement: ${file}`);
+      const { errors, skill } = previewCardErrors(preview.content);
+      if (errors.length) throw new Error(`Invalid handoff preview card ${file}: ${errors.join("; ")}`);
+      if (skill && !(await installedFile(`.omp/skills/${skill}/SKILL.md`)) && !(await installedFile(`.claude/skills/${skill}/SKILL.md`))) {
+        throw new Error(`Handoff preview card ${file} names an unavailable skill: ${skill}`);
+      }
+    }
   }
   const preservedAgents = new Set<string>();
   for (const specialist of specialists) for (const port of [".omp", ".claude"]) {
     const file = `${port}/agents/${specialist.agent}.md`;
-    if (!(await agentFile(file))) throw new Error(`Invalid or unavailable specialist agent in ${port}: ${specialist.agent}`);
+    if (!(await installedFile(file))) throw new Error(`Invalid or unavailable specialist agent in ${port}: ${specialist.agent}`);
     // An explicit project overlay wins; kit entries never replace project-owned reviewers.
     if (await existing(join(target, file)) && !(overlay && await existing(join(overlay, file)))) {
       entries.delete(file);
@@ -536,6 +579,7 @@ export async function install(options: { manifest: string; target: string; kit?:
     config.content = Buffer.from(`${JSON.stringify({
       defaultBranch: manifest.git.defaultBranch, topology: manifest.topology, tracking: manifest.tracking, landing: manifest.landing, kit: { commit },
       ...(specialists.length ? { review: manifest.review } : {}),
+      ...(manifest.handoff ? { handoff: manifest.handoff } : {}),
       ...(testingFor(manifest) ? { testing: testingFor(manifest) } : {}),
       ...(manifest.standards?.length ? { standards: manifest.standards } : {}),
       ...(manifest.landing.mode === "pull-request" || manifest.standards?.length || specialists.length ? { repositories: [

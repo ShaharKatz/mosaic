@@ -2,8 +2,15 @@
 description: "Write approval, intake, leftovers, and sign-off briefs that a human can decide from without reconstructing the session."
 ---
 Read when: drafting an approval request, an intake or leftovers digest, or a sign-off brief; this rule applies only to those briefs.
+{{HANDOFF}}
+Read when also: drafting a handoff packet; extend this rule's brief scope to that packet.
+{{/HANDOFF}}
 # Human briefs
 - Name the audience before drafting; explain this change's flow and effects at their starting point.
+{{HANDOFF}}
+- A handoff packet addresses the named acceptor, not the contributor: say what changed, what to check against the plan's acceptance criteria, and how their answer permits or holds merge; at most 40 physical lines.
+- Name matching suggested flows and their gates in plan approval briefs; only the human selects them. Onboarding roster briefs separate proposed roles from reviewer-merged authority and state whose personal confirmation was verified. Slack is notification-only: disclose missing, failed or uncertain delivery, never claim it proves acceptance.
+{{/HANDOFF}}
 - First sentence: the claim in ordinary words—who did what and what follows. Put identifying codes afterward, once, in parentheses, only to locate the thing.
 - Use plain names; no session-invented labels, finding nicknames, or agent names. Vocabulary the human used in this session is already known; do not restate it.
 - Keep plain wording exactly as true as the code; remove unsupported certainty and vague simplifications.

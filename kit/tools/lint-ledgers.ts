@@ -1,7 +1,10 @@
 #!/usr/bin/env bun
 // Port-neutral governed-record validation. CLI: 0 valid, 1 schema errors, 2 usage/unreadable.
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
+import type * as Handoff from "./constants/handoff.ts";
+import { realpathWithinRoot } from "./root-containment.ts";
 
 const STATUS_ENUM = ["draft", "approved", "executing", "review", "done", "abandoned"] as const;
 const STATUS_HINT = `expected one of: ${STATUS_ENUM.join("|")}`;
@@ -303,6 +306,41 @@ function projectRoot(abs: string): string | undefined {
 	}
 }
 
+/** Optional handoff fields are inert in projects without the module. */
+function handoffErrors(abs: string, content: string): string[] {
+	const root = projectRoot(abs);
+	if (!root) return [];
+	const config = JSON.parse(fs.readFileSync(path.join(root, ".omp/mosaic.json"), "utf8"));
+	if (config?.handoff === undefined) return [];
+	const frontmatter = /^---\r?\n([\s\S]*?)^---\r?$/m.exec(content)?.[1];
+	if (!frontmatter || !/^flow:/m.test(frontmatter)) {
+		return frontmatterStatus(content) === "draft" ? []
+			: ["missing flow: record a flow id or `none — <reason>`; in-flight plans that predate the module use `none — predates handoff`"];
+	}
+	// Installs without handoff omit this module; keep the synchronous hook API.
+	const ownRoot = path.dirname(fs.realpathSync(import.meta.path));
+	const helperPath = realpathWithinRoot(ownRoot, path.join(ownRoot, "constants/handoff.ts"));
+	if (!helperPath || !fs.statSync(helperPath).isFile()) throw new Error("handoff helper is unavailable or escapes lint-ledgers' directory");
+	const handoff = createRequire(import.meta.url)(helperPath) as typeof Handoff;
+	try {
+		const settings = handoff.validateHandoff(config.handoff, { landing: config.landing?.mode ?? "direct", tracking: config.tracking?.mode ?? "none" });
+		const plan = handoff.planFrontmatter(content);
+		const flow = handoff.flowValue(plan.flow, settings);
+		const errors: string[] = [];
+		if (flow.kind === "tbd" && plan.status !== "draft") errors.push("flow: TBD is only allowed while status: draft");
+		if (Object.keys(plan.acceptors).length) {
+			const people = handoff.parseRoster(fs.readFileSync(path.join(root, handoff.ROSTER_PATH), "utf8"));
+			for (const [role, handle] of Object.entries(plan.acceptors)) {
+				try { handoff.assertAcceptor(role, handle, settings, people, "plan acceptors"); }
+				catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
+			}
+		}
+		return errors;
+	} catch (error) {
+		return [error instanceof Error ? error.message : String(error)];
+	}
+}
+
 /** Every pitfall catalog of the project: the link's `docs/architecture/pitfalls.md` and each member's `docs/pitfalls.md`. */
 function pitfallCatalogs(root: string): string[] {
 	const out = [path.join(root, "docs", "architecture", "pitfalls.md")];
@@ -362,7 +400,7 @@ function subjectFor(kind: Kind, base: string): string {
 function validate(kind: Kind, abs: string, content: string): string[] {
 	switch (kind) {
 		case "plan":
-			return validatePlan(content);
+			return [...validatePlan(content), ...handoffErrors(abs, content)];
 		case "ledger":
 			return validateLedger(content);
 		case "gaps":

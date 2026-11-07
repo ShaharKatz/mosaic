@@ -25,6 +25,10 @@ tracker:
   url: <item URL>
 {{/TRACKING_MCP}}
 areas: []            # link-root-relative path globs and contract:<name>; fill from intended scope
+{{HANDOFF}}
+flow: TBD            # handoff flow id, or `none — <reason>`; resolved by `bun tools/handoff.ts resolve` while drafting, confirmed before approval
+acceptors: {}        # optional role → acceptor for this plan, e.g. { designer: "@dana" }
+{{/HANDOFF}}
 ---
 
 # Plan NNNN — <title>

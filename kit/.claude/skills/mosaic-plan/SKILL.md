@@ -16,6 +16,9 @@ Planning runs at maximum effort. Use the configured planning role; if that role 
 3. Read `docs/process/records.md`; read `docs/process/plan-home.md`; read `docs/process/git-flow.md`.
    Reserve the number under `docs/process/plan-home.md` R2. This is the row Phase 3 will update.
 4. Read `docs/process/plan-home.md`; read `docs/process/tracker.md`. Copy the link repo's `docs/plans/TEMPLATE.md` to `<home>/docs/plans/NNNN-<slug>.md`; create its `docs/plans/` directory on first use. Fill today's date, title, number, `status: draft`, target `repo:` list, branch, and `areas:`; handle tracking metadata and binding the plan to intent only as the installed mode requires. Preserve collision evidence and any unsent events under that rule. Use `docs/process/plan-home.md` R5/R8 for task paths and prose links.
+{{HANDOFF}}
+   Read `docs/process/handoff.md` "Flow at planning"; run `bun tools/handoff.ts resolve --plan <path>` from the link root. Fill `flow:` and resolved `acceptors:` from its result; use `flow: none — <reason>` for no handoff. Consider matching `suggestions` (`id`, optional `when` condition), never auto-select them. Keep `flow: TBD` only while drafting an ambiguous choice and ask the human; leave unresolved acceptors unset rather than inventing a person.
+{{/HANDOFF}}
 {{LANDING_PULL_REQUEST}}
    Read `docs/process/stacked-prs.md`. Fill one `bases` map entry for every branched Git repository (including `link-repo` for cross-repo plans), with the default branch and null `base-pr`, or that repository's parent branch and PR number. No scalar declaration or member copy of the plan.
 {{/LANDING_PULL_REQUEST}}
@@ -55,3 +58,6 @@ Planning runs at maximum effort. Use the configured planning role; if that role 
 1. Read `docs/process/records.md`; read `docs/process/plan-home.md`.
    {{LANDING_PULL_REQUEST}}Before approval, confirm the reservation pull request is merged (`gh pr view <n> --json state` must report `MERGED`), re-fetch `{{DEFAULT_BRANCH}}`, and confirm its ledger contains the reserved row. {{/LANDING_PULL_REQUEST}}Confirm the reserved master-ledger row's title and status; do not add it twice. For a member-homed plan, seed or update the local ledger using R3's schema.
 2. Read `docs/process/human-gates.md`; read `docs/process/map.md`; read `docs/process/tracker.md`. Present the plan and a Planning-log summary: rounds, standing rejections, human rulings, and the retained mode-specific collision report with its limitations and unresolved overlaps. Only the human authorizes `draft → approved`; record that authorization before changing status, then follow the installed tracking mode's approval procedure. Do not begin execution in this invocation.
+{{HANDOFF}}
+   The approval brief states the proposed handoff, names any matching suggested flow and its gates, and offers "skip handoff" per `docs/process/handoff.md` "Flow at planning". The human decides; suggestions never select. Record their answer as `flow:` (or `flow: none — <reason>`) before `draft → approved`; never approve `TBD`. The approved flow is part of the plan's scope.
+{{/HANDOFF}}

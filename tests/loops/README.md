@@ -281,6 +281,9 @@ After approval, I will implement the tasks, obtain independent review, run the l
 | `S22-reconcile-decision` | Reconcile a stale cache implication and a partially answered question inline, without reopening the ruling | D3 amended in place; ruling/Rejected blocks and global D-numbers preserved; question/owner unchanged with appended evidence; Execution-log or brief source citation; no assistant-authored ownership vocabulary, maintenance-procedure reads, or human question; source unchanged; exit 0 | correct amendment versus supersession, evidence without resolving policy, no procedural deferral |
 | `S23-final-review-ready` | Finish planned/light/docs-only open-PR readiness using local bare origins and offline gh | default gpt-reviewer dispatch pinned to planned/light heads; docs exemption plus exact-head CI; all paginated comment surfaces; attributed bot rulings/replies and README repair; branch review records | substantive verdicts, no invented approval, evidence reuse, no optional-engine prerequisite, honest ready message |
 | `S24-final-review-blocked` | Handle a failed second comment page, concurrent own-code push after review, and two prior REVISE rounds | failed fetch blocks readiness; repinned delta dispatch and new-head CI; human escalation without a third round or source repair; branch records and report | no stale-head readiness, replay scope, independent final/task limits, no silent fetch failure |
+| `S25-handoff-request` | Continue the same writer's signed-off session at the designer handoff | REQUESTED names Dana and the observed PR head; published journal predates handoff outbox event/comment; packet binds mention, head, PR and evidence without a reviewer request; status 1; no merge | acceptance packet quality, journal-first replay, notification preference, stop without polling |
+| `S26-handoff-accept` | Resume a gone writer's R1 with product, relayed and direct-designer replies | seeded inventory unchanged; cited reply resolves to Dana's direct R1 reply; ACCEPTED is published with docs-only head continuity; both surfaces read; status 0; final report names uncounted replies and human merge; no merge | identity/parent/relay verification, acceptance recheck, writer takeover, honest human merge gate |
+| `S27-handoff-returned` | Repair the designer's returned defect while holding a preference for the contributor and deferring an unrelated request | seeded inventory unchanged; RETURNED and three findings published; pushed mobile/desktop AC1 fix preserves AC2 and has post-return review/verification; executing generation-4 takeover; local deferral; status 1; no ACCEPTED or merge | defect/amendment/deferral classification, actual repair evidence, contributor decides amendment rather than silent application |
 
 S7–S9 report `CANNOT-EVALUATE: no intake/tracker/librarian in baseline` for every check on the
 baseline harness. S6 runs on both; only its tracker check is not evaluable on baseline. S8 seeds
@@ -330,6 +333,50 @@ bun tests/loops/scenarios/S23-final-review-ready/host-smoke.ts
 
 The host smoke exercises typed/raw fields, JSON input and body files against the executable
 fake host, including an explicit GET override; it never calls a real host.
+
+S25–S27 are mosaic-only handoff cases. Each invokes the real installer with local replay tracking,
+GitHub pull-request landing and the optional `design-acceptance` flow in a disposable monorepo,
+preserving runner model-role overrides. The overlaid roster gives Dana the designer role and a
+tracker-reply preference; Lior is product. Plan 0007 is archived `done` but unlanded, ENG-7 is its
+local replay item, and PR #12 is on a local bare origin. S25 retains writer `w-1a2b3c4d#2`; S26/S27
+have a gone `w-old00001#3` owner and explicit human authorization for a new generation-4 writer.
+The S25 support files share S23's host request decoder and assertion mechanics; the extended
+offline host records every call, review identities/commit IDs, timestamps and the published
+plan snapshot. It refuses merges and has no network fallback. Use the prompt's case-local
+`PATH="$PWD/../../.scenario/bin:$PATH"` boundary for every host command.
+
+A REQUESTED line pins the readiness head **before** its journal commit; committing that line
+necessarily changes the SHA. The checker requires an observed matching request head and an
+unchanged own-code delta, not impossible equality with the self-containing journal commit.
+S25 proves journal-first using the committed plan in a successful fake-host read before both
+outbox timestamps, and binds the packet to that request's SHA (full or a ≥12-character prefix),
+PR and evidence path. S26/S27 seed the request plus a later docs-only journal/replay inventory
+commit. A setup-time SHA-256 protects the inventory bytes, and the checker resolves the cited
+reply with the installed tracker CLI to verify Dana's author ID, R1 parent and null `onBehalfOf`.
+Both outcomes and S27's findings must be present on the published topic, not only locally.
+The seeded replies deliberately include wrong-role and relayed approvals, plus a GitHub bot
+approval. S27 requires the AC1 mobile defect repaired and pushed with task-review and verification
+records after RETURNED, while executing the pushed source proves both desktop/mobile AC1 and
+unchanged AC2. Only the separate action-label amendment waits for the contributor's decision;
+account notifications remain out of scope and are recorded separately.
+
+Validate setup without starting a model, and exercise all three checkers on hand-made good and
+bad end states using real installed tracker/status executables and the offline host:
+
+```sh
+bun tests/loops/run.ts --scenario S25-handoff-request --harness mosaic --model claude-opus-5-5 --thinking medium --dry-run
+bun tests/loops/run.ts --scenario S26-handoff-accept --harness mosaic --model claude-opus-5-5 --thinking medium --dry-run
+bun tests/loops/run.ts --scenario S27-handoff-returned --harness mosaic --model claude-opus-5-5 --thinking medium --dry-run
+bun tests/loops/scenarios/S25-handoff-request/probe.ts
+```
+
+The probe prints PASS for each good check and FAIL for targeted bad evidence: premature or
+mismatched packets, wrong/relayed/bot acceptance, edited seeded replies, local-only records,
+unfixed pushed mobile code despite a local fix, silent amendments, missing repair evidence,
+missing takeover/deferral and merge attempts. Its good states exercise installed resolve/status
+commands, real replay takeover and parent-linked comments, executable host reads and pushed code;
+review verdict records are explicitly hand-made probe fixtures, not model reviews. It removes its
+temporary repositories and neither calls a model nor claims to evaluate rubric classification/repair quality.
 
 S22 is mosaic-only. Setup adds a cache to the existing `member-a/member_a/api.py`: a cache hit
 returns stored data without testing its expiry timestamp. D3 retains that ruling but incorrectly

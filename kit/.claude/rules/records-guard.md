@@ -11,6 +11,7 @@ paths:
   - ".omp/**"
   - ".claude/**"
   - "docs/process/**"
+  - "docs/surfaces/**"
 ---
 Read when: editing a governed record.
 You are editing a governed record. Before continuing:

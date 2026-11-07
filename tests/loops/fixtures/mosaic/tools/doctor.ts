@@ -6,13 +6,15 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { realpathWithinRoot } from "./root-containment.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type { Handoff } from "./constants/handoff.ts";
+import type * as HandoffContract from "./constants/handoff.ts";
 
 type Outcome = "FAIL" | "WARN" | "CANNOT-EVALUATE";
 const counts = { FAIL: 0, WARN: 0, "CANNOT-EVALUATE": 0 };
 const reported = new Set<string>();
 const maintenanceChecks: Record<string, true> = {
 	budgets: true, "read-before-mutate": true, "mosaic-config": true, "guard-config": true,
-	"single-home": true, "port-parity": true, symlinks: true, "governed-guard": true, placeholders: true, standards: true, specialists: true,
+	"single-home": true, "port-parity": true, symlinks: true, "governed-guard": true, placeholders: true, standards: true, specialists: true, handoff: true,
 };
 function finding(outcome: Outcome, check: string, file: string, detail: string): void {
 	if (maintenanceChecks[check]) detail = `/mosaic-kit: ${detail}`;
@@ -101,11 +103,15 @@ let diagramsRoot = "";
 type Specialist = { agent: string; paths: string[]; context?: string };
 let specialists: Specialist[] = [];
 let reviewEngine = false;
+let handoffSelected = false;
+let handoff: Handoff | undefined;
+let handoffContract: typeof HandoffContract | undefined;
 if (fs.existsSync(path.join(root, configPath))) {
 	const content = text("mosaic-config", configPath);
 	if (content !== undefined) {
 		try {
 			const config = JSON.parse(content);
+			handoffSelected = config.handoff !== undefined;
 			if (typeof config.defaultBranch !== "string" || !config.defaultBranch.trim() || /[\r\n\0]/.test(config.defaultBranch)) {
 				throw new Error("defaultBranch must be a nonempty single-line string");
 			}
@@ -279,6 +285,17 @@ if (fs.existsSync(path.join(root, configPath))) {
 				}
 				specialists = review.specialists;
 			}
+			if (handoffSelected) {
+				// The helper is absent without handoff; load only our contained sibling, never code from --root.
+				const helper = new URL("./constants/handoff.ts", import.meta.url);
+				const ownRoot = fs.realpathSync(path.dirname(import.meta.path));
+				const helperPath = fs.realpathSync(helper);
+				if (realpathWithinRoot(ownRoot, helperPath) === null || !fs.statSync(helperPath).isFile()) {
+					throw new Error("handoff helper is unavailable or escapes doctor's directory");
+				}
+				handoffContract = await import(helperPath);
+				handoff = handoffContract!.validateHandoff(config.handoff, { landing: landing.mode, tracking: tracking.mode });
+			}
 			if (config.testing !== undefined) {
 				reviewEngine = true;
 				// Load only our own optional helper, never code from the inspected --root.
@@ -293,6 +310,60 @@ if (fs.existsSync(path.join(root, configPath))) {
 			trackingMode = tracking.mode;
 		} catch (error) {
 			finding("FAIL", "mosaic-config", configPath, String(error));
+		}
+	}
+}
+const handoffFiles = [
+	"docs/process/handoff.md", ".omp/rules/handoff.md",
+	"tools/handoff.ts", "tools/constants/handoff.ts",
+	".omp/skills/mosaic-onboard/SKILL.md", ".claude/skills/mosaic-onboard/SKILL.md",
+];
+if (handoffSelected) handoffFiles.push("docs/surfaces/people.md");
+for (const file of handoffFiles) {
+	if (!handoffSelected) {
+		if (fs.existsSync(path.join(root, file))) finding("WARN", "handoff", file, "kit-owned handoff file present without handoff metadata; remove it when switching the module off");
+		continue;
+	}
+	try {
+		const real = realpathWithinRoot(root, path.join(root, file));
+		if (!real || !fs.statSync(real).isFile() || !(fs.statSync(real).mode & 0o444)) throw new Error("missing, unreadable, or outside repository");
+		fs.accessSync(real, fs.constants.R_OK);
+	} catch (error) {
+		unsafeBundleFiles.add(file);
+		finding("FAIL", "handoff", file, `required handoff file ${String(error)}`);
+	}
+}
+if (handoff && handoffContract) {
+	const roster = text("handoff", handoffContract.ROSTER_PATH);
+	if (roster !== undefined) {
+		try {
+			const people = handoffContract.parseRoster(roster);
+			for (const error of handoffContract.rosterErrors(people, handoff)) {
+				finding("FAIL", "handoff", handoffContract.ROSTER_PATH, error);
+			}
+			if (handoff.notify?.slack) {
+				const gateRoles = new Set(handoff.flows.flatMap(flow => flow.gates.map(gate => gate.role)));
+				for (const person of people) {
+					if (person.slackId === undefined && person.roles.some(role => gateRoles.has(role))) {
+						finding("WARN", "handoff", handoffContract.ROSTER_PATH, `${person.handle} holds a gate role but has no Slack id for handoff.notify.slack`);
+					}
+				}
+			}
+		} catch (error) { finding("FAIL", "handoff", handoffContract.ROSTER_PATH, String(error)); }
+	}
+	if (handoff.preview) {
+		try {
+			const real = realpathWithinRoot(root, path.join(root, handoff.preview));
+			if (!real || !fs.statSync(real).isFile() || !(fs.statSync(real).mode & 0o444)) throw new Error("preview card is missing, unreadable, or outside repository");
+			const { errors, skill } = handoffContract.previewCardErrors(fs.readFileSync(real, "utf8"));
+			for (const error of errors) finding("FAIL", "handoff", handoff.preview, error);
+			if (skill) {
+				const target = realpathWithinRoot(root, path.join(root, skillTarget(skill)));
+				if (!target || !fs.statSync(target).isFile()) throw new Error(`preview card names an unavailable skill: ${skill}`);
+			}
+		} catch (error) {
+			unsafeBundleFiles.add(handoff.preview);
+			finding("FAIL", "handoff", handoff.preview, String(error));
 		}
 	}
 }
@@ -358,6 +429,7 @@ const processNames = [
 	"targeted-tests", "records-guard", "model-notes", "intake", "tracker", "stack-acceptance",
 ];
 if (pullRequestMode) processNames.push("final-review", "stacked-prs");
+if (handoffSelected) processNames.push("handoff");
 for (const file of ["docs/process/stacked-prs.md", ".omp/rules/stacked-prs.md", "tools/stack-base.ts", "tools/constants/stack-base.ts"]) {
 	const present = fs.existsSync(path.join(root, file));
 	if (present !== pullRequestMode) finding(pullRequestMode ? "FAIL" : "WARN", "mosaic-config", file, pullRequestMode ? "required in pull-request mode" : "not installed by direct mode; preserve project-owned content");
@@ -367,6 +439,7 @@ const skillNames = ["mosaic-plan", "mosaic-execute", "mosaic-gap-audit", "mosaic
 if (diagramsOn) skillNames.push("diagrams");
 if (specialists.some(entry => entry.agent === "frontend-reviewer")) skillNames.push("frontend-review");
 if (reviewEngine) skillNames.push("review-with-codex");
+if (handoffSelected) skillNames.push("mosaic-onboard");
 const agentPairs = [
 	["executor", "executor"], ["plan-adversary", "plan-adversary"], ["registry-scout", "registry-scout"],
 	["context-scout", "context-scout"], ["claude-reviewer", "reviewer"], ["gpt-reviewer", "reviewer"],
@@ -395,6 +468,7 @@ const harnessFiles = [
 ];
 if (fs.existsSync(path.join(root, ".omp/mosaic.json"))) harnessFiles.push(".omp/mosaic.json");
 if (specialists.length) harnessFiles.push("tools/specialists.ts");
+if (handoffSelected) harnessFiles.push("tools/handoff.ts", "tools/constants/handoff.ts");
 for (const standard of standards) {
 	harnessFiles.push(`.omp/rules/${standard.name}.md`, `.claude/rules/${standard.name}.md`);
 }

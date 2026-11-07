@@ -16,6 +16,9 @@ A step you have decided on is something to run, not to announce; end the turn on
 | `docs/process/git-flow.md` | Branching, committing, or landing |
 | `docs/process/dispatch.md` | Authoring tasks or dispatching executors |
 | `docs/process/review-loop.md` | Reviewing a task or resolving findings |
+{{HANDOFF}}
+| `docs/process/handoff.md` | Planning a flow or requesting and verifying acceptance before merge |
+{{/HANDOFF}}
 | `docs/process/verification.md` | Writing or running plan verification |
 | `docs/process/records.md` | Editing governed docs, project agents, skills, or rules |
 | `docs/process/registries.md` | Checking registries or an unfamiliar area |

@@ -150,6 +150,106 @@ Project-owned context files may be in-root symlinks. Existing specialist agents 
 reported, even under `--force`; explicit project overlay entries take precedence. Upgrade kit-owned
 twins through the scratch procedure, not by overwriting project reviewers.
 
+### Optional handoff acceptance
+
+Opt in with `handoff` only for GitHub pull-request landing. After final review reaches exact-head
+readiness, a plan can hand the reviewed pull request to a named roster person for acceptance
+before the human merges. The approval brief confirms the flow and always offers "skip handoff",
+recorded as `flow: none — <reason>`; this is a landing precondition, not a new plan status.
+
+For an MCP-tracked project with a verified `QA` state and an attested review-request tracker pipe:
+
+```json
+{
+  "handoff": {
+    "flows": [
+      {
+        "id": "design-acceptance",
+        "areas": ["services/frontend/**"],
+        "when": "Changes alter a user-visible interaction",
+        "gates": [
+          {
+            "role": "designer",
+            "surfaces": ["tracker-reply", "pr-review"],
+            "artifacts": ["pr", "preview"],
+            "state": "QA"
+          }
+        ]
+      }
+    ],
+    "preview": "docs/surfaces/preview.md",
+    "requestReview": false,
+    "notify": { "slack": { "server": "slack", "channel": "design-review" } }
+  }
+}
+```
+
+Names, paths and states above are illustrative, never seed data. Flows have unique ids and
+nonempty ordered gates with one gate per role; optional `areas` are installation-relative globs.
+Optional nonempty single-line `when` describes when to suggest a flow; `resolve` returns
+unselected flows with conditions as `suggestions: [{id,when}]`. Planning considers matches and
+names their gates in the approval brief; the human decides, never automatic selection.
+`tracker-reply` needs local replay or MCP tracking; `pr-review` uses GitHub. Without tracking,
+only PR reviews are available. Gate `state` is optional and MCP-only; when configured, verify the
+team has it before setting it. Without it, record managed last-event `handoff` and the request
+comment while preserving the current native tracker state; local replay still emits its `handoff` event.
+Artifacts default to `["pr"]`; including `preview` requires a project-owned card at `preview`.
+`requestReview` defaults to true. Set false only when the owner attests that requesting a GitHub
+review triggers a tracker state change; the tracker mention is then the notification. A
+ready-for-merge automation must not target the gate's state. Installation makes no tracker,
+review-request or deployment writes; record the [H-handoff ruling](../install/migration-map.md#handoff-survey-and-h-handoff) and read-only proof.
+Optional `notify.slack` uses a named mounted runtime server, never an installed client.
+`server` starts with a letter and contains only letters/digits/underscore/hyphen; optional
+`channel` is a nonempty single-line name/id, absent means DM via the roster Slack id.
+H-handoff records routing, verified ids and owner attestation of contributor-runtime mounts.
+Send short notifications after tracker/PR updates, on teammate confirmation requests and
+withdrawal/override; Slack replies never count as acceptance. Disclose failed/uncertain sends;
+they never block or replace tracker requests. Read the conversation before uncertain retries.
+Installation performs no Slack writes.
+
+Selection installs `docs/process/handoff.md` and its omp rule symlink, the Registry-class roster
+at `docs/surfaces/people.md`, `tools/handoff.ts` with shared constants, and `/mosaic-onboard` twins.
+Populate the roster through a project overlay or a reviewed post-install edit before doctor:
+stable handles, roles, verified tracker author ids/mentions, GitHub logins, optional unique-token
+Slack ids (`—` when absent) and preferences within gate policy; no emails/secrets or Slack acceptance.
+The exact header is `| Handle | Roles | Tracker id | Tracker mention | GitHub login | Slack id | Prefers |`;
+old six-column rosters are rejected. The kit ships no preview card.
+When selected, the card must exist in the target or overlay before installation and follow the
+handoff rule's format: `produce: pipe`, `command`, `manual` or `skill:<name>`, then Produce,
+Served commit, Access and classification, and Lifetime and teardown sections. Any named skill
+must resolve; preview production occurs only at request time under the approved flow.
+
+Run `bun tools/handoff.ts roster` for people and `resolve --plan <path>` for draft choices.
+Plan `flow:` overrides personal defaults, then area matching; ambiguous matches need the human.
+Per-role `acceptors:` override personal choices, then the sole role holder; unresolved people
+are asked for, not invented. `/mosaic-onboard` verifies self identities or requests a teammate's
+personal tracker-thread confirmation (GitHub review/comment on the roster PR with tracking none).
+The contributor's identities are confirmed separately; their own reply never confirms a teammate,
+even when it matches the proposed identity. A person onboarding themselves uses self mode.
+Its sole repo-edit exception is roster-only PRs on `roster/<handle-without-@>`; roles are proposed
+until reviewer merge. It dry-runs validated `roster --set` before writing, then commits/pushes/opens
+the PR; it never edits flows/cards. `roster --set` updates only supplied fields (`—` clears optional),
+validates resulting roster+flows, and preserves unsupplied bytes and the original file mode.
+Contained roster symlinks are followed without replacing the link; targets outside the project
+are refused. The tool writes a temporary file beside the real target and renames it over that
+target only after a complete write; failure preserves the original and removes the temporary file. JSON returns
+`{path,handle,action:added|updated|unchanged,row,written}` with canonical Markdown `row`.
+Personal defaults remain under `$XDG_CONFIG_HOME` (else `~/.config`), shared by committed remote
+key outside all checkouts. Self mode writes them from the roster branch, effective after merge;
+rerun if the reviewer changes the row. `bun tools/handoff.ts user` shows path, validity and settings.
+`bun tools/handoff.ts status --plan <path>` validates archived Execution-log lines: exit 0 means
+no gates or all cleared, 1 means pending, 2 means cannot-evaluate. Recorded acceptance must
+still hold on the reviewed head immediately before merge. Later returned feedback by the same
+acceptor supersedes an ACCEPTED in the same round: append RETURNED without removing history;
+the gate is pending until a new round clears. A return or new round on an earlier gate also
+invalidates every later request/acceptance; each later gate needs a new round after its predecessors
+clear again. Existing WITHDRAWN/OVERRIDDEN human rulings stand because they are not head-bound
+acceptances. Keep all prior journal lines. Classify feedback as defect, amendment or deferral
+and repair through the existing review route, not a reopened plan.
+Omitting `handoff` installs none of its files or conditional callers. Later switches use the
+same reviewed scratch-render comparison as tracking/landing and preserve historical records.
+
+
 ## Reference
 
 ### Topology and default branch
@@ -187,6 +287,7 @@ The skill supplies every value from survey evidence; source Markdown uses these 
 | `TRACKING_NONE` / `TRACKING_LOCAL` / `TRACKING_MCP` | Mode blocks with slash-prefixed closing tokens; keep only the selected mode; may contain topology blocks |
 | `LANDING_DIRECT` / `LANDING_PULL_REQUEST` | Landing blocks with slash-prefixed closing tokens; selected after tracking and before topology; may contain topology blocks |
 | `CLOSE_OUT_TWO_COMMIT` / `CLOSE_OUT_DEFAULT` | Close-out blocks with slash-prefixed closing tokens; selected after landing and before topology; opt-in two-commit layout or unchanged default layout |
+| `HANDOFF` | Own-line, slash-closed opt-in block; keeps handoff callers only when selected, including inside tracking/landing blocks |
 | `MULTI_REPO` / `MONOREPO` | Non-nested topology blocks selected after tracking and landing blocks; then expand value tokens |
 | `STANDARDS` | Optional Standards section and selected canonical links; empty when none selected |
 | `STANDARD_PATHS` / `STANDARD_SCOPE` | JSON-quoted Claude paths list / one-line JSON sequence of complete omp edit-write scope tokens |
