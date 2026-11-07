@@ -12,6 +12,7 @@ const PROJECT = "github.com/acme/app";
 const HEAD = "a".repeat(40), NEXT_HEAD = "b".repeat(40), AT = "2026-11-04T10:00:00Z";
 const ROSTER = `# People\n\n| Handle | Roles | Tracker id | Tracker mention | GitHub login | Slack id | Prefers |\n|---|---|---|---|---|---|---|\n| @dana | designer | dana-id | @Dana Levi | dana-l | U_DANA | — |\n| @pat | product | pat-id | @Pat | pat-p | U_PAT | — |\n| @dev | engineer | dev-id | @Developer | dev-e | U_DEV | — |\n`;
 const LEE = "| @lee | designer | lee-id | @Lee | lee-d | U_LEE | — |\n";
+const QUINN = "| @quinn | qa | quinn-id | @Quinn | quinn-q | U_QUINN | — |\n";
 let count = 0;
 
 class Fixture {
@@ -570,6 +571,75 @@ mock.module("node:fs", () => ({ ...fs, writeFileSync(file, data, ...options) {
 		r.plan({ flow: "design-and-product" }, log); const pending = r.command(["status", "--plan", PLAN], 1);
 		same(pending.gates.map((gate: { state: string }) => gate.state), ["accepted", "requested"]);
 		r.plan({ flow: "design-and-product" }, `${log}\n${accepted("product", "@pat")}`); eq(r.command(["status", "--plan", PLAN]).cleared, true);
+	});
+	test("earlier return invalidates downstream acceptance through repair", r => {
+		const file = "docs/plans/archived/0042-handoff.md";
+		const log = `${requested()}\n${accepted()}\n${requested("product", "@pat")}\n${accepted("product", "@pat")}\n${returned}\n${findings}`;
+		r.plan({ flow: "design-and-product", status: "done" }, log, file);
+		const before = readFileSync(join(r.root, file), "utf8"), result = r.command(["status", "--plan", file], 1);
+		eq(result.cleared, false);
+		same(result.gates.map((gate: { state: string }) => gate.state), ["returned", "none"]);
+		eq(result.gates[1].round, 1); eq(result.gates[1].acceptedHead, null);
+		eq(readFileSync(join(r.root, file), "utf8"), before);
+		r.plan({ flow: "design-and-product", status: "done" }, `${log}\n${requested("designer", "@dana", 2, NEXT_HEAD)}\n${accepted("designer", "@dana", 2, NEXT_HEAD)}`, file);
+		const repaired = r.command(["status", "--plan", file], 1);
+		eq(repaired.cleared, false);
+		same(repaired.gates.map((gate: { state: string }) => gate.state), ["accepted", "none"]);
+		eq(repaired.gates[0].acceptedHead, NEXT_HEAD); eq(repaired.gates[1].round, 1);
+	});
+	test("downstream reacceptance clears after earlier repair", r => {
+		r.plan({ flow: "design-and-product" }, [
+			requested(), accepted(), requested("product", "@pat"), accepted("product", "@pat"), returned, findings,
+			requested("designer", "@dana", 2, NEXT_HEAD), accepted("designer", "@dana", 2, NEXT_HEAD),
+			requested("product", "@pat", 2, NEXT_HEAD), accepted("product", "@pat", 2, NEXT_HEAD),
+		].join("\n"));
+		const result = r.command(["status", "--plan", PLAN]);
+		eq(result.cleared, true);
+		same(result.gates.map((gate: { round: number; acceptedHead: string }) => [gate.round, gate.acceptedHead]), [[2, NEXT_HEAD], [2, NEXT_HEAD]]);
+	});
+	test("earlier stale-head round invalidates every later gate", r => {
+		r.put("docs/surfaces/people.md", ROSTER + QUINN);
+		r.handoff.flows[2]!.gates.push({ role: "qa", surfaces: ["tracker-reply"], artifacts: ["pr"] }); r.config();
+		r.plan({ flow: "design-and-product" }, [
+			requested(), accepted(), requested("product", "@pat"), accepted("product", "@pat"), requested("qa", "@quinn"),
+			requested("designer", "@dana", 2, NEXT_HEAD), accepted("designer", "@dana", 2, NEXT_HEAD),
+		].join("\n"));
+		const result = r.command(["status", "--plan", PLAN], 1);
+		eq(result.cleared, false);
+		same(result.gates.map((gate: { state: string; round: number }) => [gate.state, gate.round]), [["accepted", 2], ["none", 1], ["none", 1]]);
+		eq(result.gates[1].acceptedHead, null); eq(result.gates[2].requestedHead, null);
+	});
+	test("reopened downstream gate cannot request before earlier repair clears", r => {
+		r.plan({ flow: "design-and-product" }, [
+			requested(), accepted(), requested("product", "@pat"), accepted("product", "@pat"), returned, findings,
+			requested("product", "@pat", 2, NEXT_HEAD),
+		].join("\n"));
+		r.command(["status", "--plan", PLAN], 2, /gate product requested before gate designer cleared/);
+	});
+	for (const prior of ["requested", "accepted"]) test(`invalidated downstream ${prior} round cannot accept an old reply`, r => {
+		r.plan({ flow: "design-and-product" }, [
+			requested(), accepted(), requested("product", "@pat"), ...(prior === "accepted" ? [accepted("product", "@pat")] : []),
+			requested("designer", "@dana", 2, NEXT_HEAD), accepted("designer", "@dana", 2, NEXT_HEAD), accepted("product", "@pat"),
+		].join("\n"));
+		r.command(["status", "--plan", PLAN], 2, /R1 for product is not open/);
+	});
+	for (const disposition of ["WITHDRAWN", "OVERRIDDEN"]) test(`earlier repair preserves ${disposition} but reopens gates beyond it`, r => {
+		r.put("docs/surfaces/people.md", ROSTER + QUINN);
+		r.handoff.flows[2]!.gates.push({ role: "qa", surfaces: ["tracker-reply"], artifacts: ["pr"] }); r.config();
+		const log = [
+			requested(), accepted(), requested("product", "@pat"), `- handoff R1 product: ${disposition} ${AT} by @dev — Human decision recorded`,
+			requested("qa", "@quinn"), accepted("qa", "@quinn"), returned, findings,
+		].join("\n");
+		r.plan({ flow: "design-and-product" }, log);
+		const returnedStatus = r.command(["status", "--plan", PLAN], 1);
+		same(returnedStatus.gates.map((gate: { state: string }) => gate.state), ["returned", disposition.toLowerCase(), "none"]);
+		const repaired = `${log}\n${requested("designer", "@dana", 2, NEXT_HEAD)}\n${accepted("designer", "@dana", 2, NEXT_HEAD)}`;
+		r.plan({ flow: "design-and-product" }, repaired);
+		const pending = r.command(["status", "--plan", PLAN], 1);
+		same(pending.gates.map((gate: { state: string }) => gate.state), ["accepted", disposition.toLowerCase(), "none"]);
+		r.plan({ flow: "design-and-product" }, `${repaired}\n${requested("qa", "@quinn", 2, NEXT_HEAD)}\n${accepted("qa", "@quinn", 2, NEXT_HEAD)}`);
+		const cleared = r.command(["status", "--plan", PLAN]);
+		eq(cleared.cleared, true); eq(cleared.gates[1].round, 1); eq(cleared.gates[2].round, 2);
 	});
 	for (const disposition of ["WITHDRAWN", "OVERRIDDEN"]) test(`${disposition} clears the request`, r => {
 		r.plan({ flow: "design-acceptance" }, `${requested()}\n- handoff R1 designer: ${disposition} ${AT} by @dev — Human decision recorded`);

@@ -241,7 +241,10 @@ rerun if the reviewer changes the row. `bun tools/handoff.ts user` shows path, v
 no gates or all cleared, 1 means pending, 2 means cannot-evaluate. Recorded acceptance must
 still hold on the reviewed head immediately before merge. Later returned feedback by the same
 acceptor supersedes an ACCEPTED in the same round: append RETURNED without removing history;
-the gate is pending until a new round clears. Classify feedback as defect, amendment or deferral
+the gate is pending until a new round clears. A return or new round on an earlier gate also
+invalidates every later request/acceptance; each later gate needs a new round after its predecessors
+clear again. Existing WITHDRAWN/OVERRIDDEN human rulings stand because they are not head-bound
+acceptances. Keep all prior journal lines. Classify feedback as defect, amendment or deferral
 and repair through the existing review route, not a reopened plan.
 Omitting `handoff` installs none of its files or conditional callers. Later switches use the
 same reviewed scratch-render comparison as tracking/landing and preserve historical records.

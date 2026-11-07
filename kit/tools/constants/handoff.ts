@@ -472,6 +472,15 @@ export type GateStatus = {
 };
 export const CLEARED: readonly GateState[] = ["accepted", "withdrawn", "overridden"];
 
+/** Later requests and acceptances bind to the old head; human withdrawals/overrides do not. */
+function reopenLaterGates(statuses: GateStatus[], index: number): void {
+	for (let later = index + 1; later < statuses.length; later++) {
+		const status = statuses[later]!;
+		if (status.state === "none" || status.state === "withdrawn" || status.state === "overridden") continue;
+		Object.assign(status, { state: "none", acceptor: null, requestedHead: null, acceptedHead: null, locator: null, at: null });
+	}
+}
+
 /** The `## Execution log` section (to the next `## ` heading or end of file). */
 export function executionLog(markdown: string): string {
 	const lines = markdown.split(/\r?\n/);
@@ -520,6 +529,7 @@ export function gateStatuses(log: string, flow: Flow, people: Person[]): GateSta
 			const person = people.find(entry => entry.handle === match[3]);
 			if (!person || !person.roles.includes(role)) throw new Error(`${where}: ${match[3]} is not a roster person holding role ${role}`);
 			Object.assign(status, { state: "requested", round, acceptor: match[3]!, requestedHead: match[5]!, acceptedHead: null, locator: null, at: match[4]! });
+			reopenLaterGates(statuses, index);
 			continue;
 		}
 		if (round !== status.round || status.round === 0) throw new Error(`${where}: no request R${round} for ${role}`);
@@ -542,6 +552,7 @@ export function gateStatuses(log: string, flow: Flow, people: Person[]): GateSta
 			Object.assign(status, { state: "returned", acceptedHead: null });
 			status.returnedRounds += 1;
 			pendingFindings.set(key, count);
+			reopenLaterGates(statuses, index);
 			continue;
 		}
 		// WITHDRAWN / OVERRIDDEN close an open request or a returned round.
