@@ -8,15 +8,15 @@ export const ARTIFACTS = ["pr", "preview"] as const;
 export type Surface = (typeof SURFACES)[number];
 export type Artifact = (typeof ARTIFACTS)[number];
 export type Gate = { role: string; surfaces: Surface[]; artifacts: Artifact[]; state?: string };
-export type Flow = { id: string; areas?: string[]; gates: Gate[] };
-export type Handoff = { flows: Flow[]; preview?: string; requestReview: boolean };
+export type Flow = { id: string; areas?: string[]; when?: string; gates: Gate[] };
+export type Handoff = { flows: Flow[]; preview?: string; requestReview: boolean; notify?: { slack: { server: string; channel?: string } } };
 export type Prefers = { surface?: Surface; artifacts?: Artifact[] };
-export type Person = { handle: string; roles: string[]; trackerId?: string; mention?: string; githubLogin?: string; prefers: Prefers };
+export type Person = { handle: string; roles: string[]; trackerId?: string; mention?: string; githubLogin?: string; slackId?: string; prefers: Prefers };
 export type UserFile = { schema: 1; project: string; me: string; defaults?: { flow?: string; acceptors?: Record<string, string> } };
 
 export const CONFIG_PATH = ".omp/mosaic.json";
 export const ROSTER_PATH = "docs/surfaces/people.md";
-export const ROSTER_HEADER = "| Handle | Roles | Tracker id | Tracker mention | GitHub login | Prefers |";
+export const ROSTER_HEADER = "| Handle | Roles | Tracker id | Tracker mention | GitHub login | Slack id | Prefers |";
 export const LINK_REPO = "link-repo";
 export const NONE = "none";
 export const TBD = "TBD";
@@ -26,9 +26,12 @@ export const PENDING = 1;
 export const CANNOT_EVALUATE = 2;
 
 const ID = /^[a-z][a-z0-9-]*$/;
-const HANDLE = /^@[a-z0-9][a-z0-9._-]*$/;
+// Removing @ must produce a valid final component of roster/<handle> without rewriting identity.
+const HANDLE = /^@(?!.*(?:\.\.|\.lock$))[a-z0-9](?:[a-z0-9._-]*[a-z0-9_-])?$/;
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 const EMPTY = "—";
+const ROSTER_FIELDS = ["handle", "roles", "trackerId", "mention", "githubLogin", "slackId", "prefers"] as const;
+export type RosterFields = { handle: string } & Partial<Record<(typeof ROSTER_FIELDS)[number], string>>;
 // Strip a trailing ` # comment`; values in this module's frontmatter fields never contain " #".
 const COMMENT = /\s+#.*$/;
 
@@ -59,19 +62,33 @@ export function safeMarkdownPath(path: unknown): path is string {
  */
 export function validateHandoff(value: unknown, context: { landing: string; tracking: string }): Handoff {
 	if (!record(value)) throw new Error("handoff must be an object");
-	onlyKeys(value, ["flows", "preview", "requestReview"], "handoff");
+	onlyKeys(value, ["flows", "preview", "requestReview", "notify"], "handoff");
 	if (context.landing !== "pull-request") throw new Error("handoff requires landing.mode: pull-request");
 	if (!Array.isArray(value.flows) || !value.flows.length) throw new Error("handoff.flows must be a nonempty array");
 	if (value.preview !== undefined && !safeMarkdownPath(value.preview)) throw new Error("handoff.preview must be a safe repository-relative .md path");
 	if (value.requestReview !== undefined && typeof value.requestReview !== "boolean") throw new Error("handoff.requestReview must be a boolean");
+	let notify: Handoff["notify"];
+	if (value.notify !== undefined) {
+		if (!record(value.notify)) throw new Error("handoff.notify must be an object");
+		onlyKeys(value.notify, ["slack"], "handoff.notify");
+		const slack = value.notify.slack;
+		if (!record(slack)) throw new Error("handoff.notify.slack must be an object");
+		onlyKeys(slack, ["server", "channel"], "handoff.notify.slack");
+		if (typeof slack.server !== "string" || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(slack.server)) {
+			throw new Error("handoff.notify.slack.server must be a nonempty single-line server slug");
+		}
+		if (slack.channel !== undefined && !singleLine(slack.channel)) throw new Error("handoff.notify.slack.channel must be a nonempty single-line string");
+		notify = { slack: { server: slack.server, ...(slack.channel !== undefined ? { channel: slack.channel as string } : {}) } };
+	}
 	const ids = new Set<string>();
 	const flows = value.flows.map((entry, index): Flow => {
 		const label = `handoff.flows[${index}]`;
 		if (!record(entry)) throw new Error(`${label} must be an object`);
-		onlyKeys(entry, ["id", "areas", "gates"], label);
+		onlyKeys(entry, ["id", "areas", "when", "gates"], label);
 		if (typeof entry.id !== "string" || !ID.test(entry.id) || entry.id === NONE || entry.id === TBD.toLowerCase()) throw new Error(`${label}.id must be a lowercase slug other than none/tbd`);
 		if (ids.has(entry.id)) throw new Error(`${label}.id is duplicate: ${entry.id}`);
 		ids.add(entry.id);
+		if (entry.when !== undefined && !singleLine(entry.when)) throw new Error(`${label}.when must be a nonempty single-line string`);
 		let areas: string[] | undefined;
 		if (entry.areas !== undefined) {
 			if (!Array.isArray(entry.areas) || !entry.areas.length || !entry.areas.every(safeGlob)) throw new Error(`${label}.areas must be a nonempty array of safe repository-relative globs`);
@@ -103,9 +120,9 @@ export function validateHandoff(value: unknown, context: { landing: string; trac
 			}
 			return gate;
 		});
-		return { id: entry.id, ...(areas ? { areas } : {}), gates };
+		return { id: entry.id, ...(areas ? { areas } : {}), ...(entry.when !== undefined ? { when: entry.when as string } : {}), gates };
 	});
-	return { flows, ...(value.preview !== undefined ? { preview: value.preview as string } : {}), requestReview: value.requestReview ?? true };
+	return { flows, ...(value.preview !== undefined ? { preview: value.preview as string } : {}), requestReview: value.requestReview ?? true, ...(notify ? { notify } : {}) };
 }
 
 function listOf<T extends string>(text: string, allowed: readonly T[], label: string): T[] {
@@ -116,25 +133,40 @@ function listOf<T extends string>(text: string, allowed: readonly T[], label: st
 	return values as T[];
 }
 
+/** Locate the one supported roster table, retaining line endings for byte-preserving writes. */
+function rosterTable(markdown: string) {
+	const lines = markdown.split(/(?<=\n)/);
+	const start = lines.findIndex(line => line.trim() === ROSTER_HEADER);
+	if (start < 0) throw new Error(`roster requires the 7-column header (including Slack id): ${ROSTER_HEADER}`);
+	if (!/^\|(?:\s*:?-{3,}:?\s*\|){7}$/.test(lines[start + 1]?.trim() ?? "")) throw new Error("roster table header must be followed by its separator row");
+	let end = start + 2;
+	while (end < lines.length && lines[end]!.trim().startsWith("|")) end++;
+	return { lines, start: start + 2, end };
+}
+
+function rosterCells(line: string): string[] {
+	const trimmed = line.trim();
+	if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) throw new Error(`roster row is not a table row: ${line}`);
+	const cells = trimmed.slice(1, -1).split("|");
+	if (cells.length !== ROSTER_FIELDS.length) throw new Error(`roster row must have 7 cells: ${line}`);
+	return cells;
+}
+
 /** Parse the roster table (first table whose header equals ROSTER_HEADER). Rows end at the first non-table line. */
 export function parseRoster(markdown: string): Person[] {
-	const lines = markdown.split(/\r?\n/);
-	const start = lines.findIndex(line => line.trim() === ROSTER_HEADER);
-	if (start < 0) throw new Error(`roster table header not found: ${ROSTER_HEADER}`);
-	if (!/^\|(?:\s*:?-{3,}:?\s*\|){6}$/.test(lines[start + 1]?.trim() ?? "")) throw new Error("roster table header must be followed by its separator row");
+	const { lines, start, end } = rosterTable(markdown);
 	const people: Person[] = [];
 	const handles = new Set<string>();
-	// One account answers as one person: tracker ids and GitHub logins (case-insensitive) are unique across rows.
+	// One account belongs to one person; GitHub logins are case-insensitive.
 	const trackerIds = new Set<string>();
 	const logins = new Set<string>();
-	for (const line of lines.slice(start + 2)) {
-		const trimmed = line.trim();
-		if (!trimmed.startsWith("|")) break;
-		if (!trimmed.endsWith("|")) throw new Error(`roster row is not a table row: ${line}`);
-		const row = trimmed.slice(1, -1).split("|").map(cell => cell.trim());
-		if (row.length !== 6) throw new Error(`roster row must have 6 cells: ${line}`);
-		const [handle, roles, trackerId, mention, login, prefers] = row.map(cell => (cell === EMPTY || cell === "" ? undefined : cell));
-		if (!handle || !HANDLE.test(handle)) throw new Error(`roster handle must look like @name: ${line}`);
+	const slackIds = new Set<string>();
+	for (const line of lines.slice(start, end)) {
+		const [handle, roles, trackerId, mention, login, slackId, prefers] = rosterCells(line).map(cell => {
+			const value = cell.trim();
+			return value === EMPTY || value === "" ? undefined : value;
+		});
+		if (!handle || !HANDLE.test(handle)) throw new Error(`roster handle must be @name and branch-safe (no consecutive dots, trailing dot or .lock suffix): ${line}`);
 		if (handles.has(handle)) throw new Error(`roster handle is duplicate: ${handle}`);
 		handles.add(handle);
 		const roleList = (roles ?? "").split(",").map(role => role.trim());
@@ -152,6 +184,12 @@ export function parseRoster(markdown: string): Person[] {
 			if (logins.has(login.toLowerCase())) throw new Error(`${handle}: GitHub login ${login} already belongs to another roster row`);
 			logins.add(login.toLowerCase());
 			person.githubLogin = login;
+		}
+		if (slackId !== undefined) {
+			if (/\s/.test(slackId)) throw new Error(`${handle}: Slack id must be one token`);
+			if (slackIds.has(slackId)) throw new Error(`${handle}: Slack id ${slackId} already belongs to another roster row`);
+			slackIds.add(slackId);
+			person.slackId = slackId;
 		}
 		for (const part of (prefers ?? "").split(";").map(item => item.trim()).filter(Boolean)) {
 			const match = /^(surface|artifacts):\s*(\S.*)$/.exec(part);
@@ -196,6 +234,46 @@ export function rosterErrors(people: Person[], handoff: Handoff): string[] {
 		}
 	}
 	return [...errors];
+}
+
+/** Upsert only supplied fields; validate the complete result before the caller may write it. */
+export function upsertRoster(markdown: string, fields: RosterFields, handoff: Handoff): { markdown: string; row: string; action: "added" | "updated" | "unchanged" } {
+	for (const field of ROSTER_FIELDS) {
+		if (fields[field] !== undefined && !singleLine(fields[field])) throw new Error(`roster ${field} must be a nonempty single-line cell; use ${EMPTY} to clear an optional field`);
+	}
+	if (!HANDLE.test(fields.handle)) throw new Error("roster handle must be @name and branch-safe (no consecutive dots, trailing dot or .lock suffix)");
+	const { lines, start, end } = rosterTable(markdown);
+	let index = end;
+	let cells = ROSTER_FIELDS.map(() => ` ${EMPTY} `);
+	for (let candidate = start; candidate < end; candidate++) {
+		const existing = rosterCells(lines[candidate]!);
+		if (existing[0]!.trim() === fields.handle) { index = candidate; cells = existing; break; }
+	}
+	const updated = ROSTER_FIELDS.map((field, column) => {
+		const original = cells[column]!, value = fields[field]?.trim();
+		if (value === undefined || value === original.trim()) return original;
+		const start = original.search(/\S/);
+		return start < 0 ? original + value : original.slice(0, start) + value + original.slice(start + original.trim().length);
+	});
+	const row = `| ${updated.map(cell => cell.trim()).join(" | ")} |`;
+	const action = index === end ? "added" : updated.every((cell, column) => cell === cells[column]) ? "unchanged" : "updated";
+	let result = markdown;
+	if (action !== "unchanged") {
+		const offset = lines.slice(0, index).reduce((length, line) => length + line.length, 0);
+		if (action === "updated") {
+			const original = lines[index]!;
+			const replacement = original.slice(0, original.indexOf("|")) + `|${updated.join("|")}|` + original.slice(original.lastIndexOf("|") + 1);
+			result = markdown.slice(0, offset) + replacement + markdown.slice(offset + original.length);
+		} else {
+			const ending = lines[start - 1]!.endsWith("\r\n") ? "\r\n" : "\n";
+			const unterminated = offset > 0 && markdown[offset - 1] !== "\n";
+			result = markdown.slice(0, offset) + (unterminated ? ending : "") + row
+				+ (offset < markdown.length || !unterminated ? ending : "") + markdown.slice(offset);
+		}
+	}
+	const errors = rosterErrors(parseRoster(result), handoff);
+	if (errors.length) throw new Error(errors.join("; "));
+	return { markdown: result, row, action };
 }
 
 /** Validate a project-owned preview card; returns the skill name when produce is `skill:<name>`. */

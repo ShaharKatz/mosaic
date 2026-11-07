@@ -337,8 +337,17 @@ if (handoff && handoffContract) {
 	const roster = text("handoff", handoffContract.ROSTER_PATH);
 	if (roster !== undefined) {
 		try {
-			for (const error of handoffContract.rosterErrors(handoffContract.parseRoster(roster), handoff)) {
+			const people = handoffContract.parseRoster(roster);
+			for (const error of handoffContract.rosterErrors(people, handoff)) {
 				finding("FAIL", "handoff", handoffContract.ROSTER_PATH, error);
+			}
+			if (handoff.notify?.slack) {
+				const gateRoles = new Set(handoff.flows.flatMap(flow => flow.gates.map(gate => gate.role)));
+				for (const person of people) {
+					if (person.slackId === undefined && person.roles.some(role => gateRoles.has(role))) {
+						finding("WARN", "handoff", handoffContract.ROSTER_PATH, `${person.handle} holds a gate role but has no Slack id for handoff.notify.slack`);
+					}
+				}
 			}
 		} catch (error) { finding("FAIL", "handoff", handoffContract.ROSTER_PATH, String(error)); }
 	}

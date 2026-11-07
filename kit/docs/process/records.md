@@ -13,7 +13,7 @@ This file is read at the point of use: every skill step that mutates a governed 
 | Registry | Plan ledgers, gaps, documentation index tables | Fixed row schema; append rows or change status |
 | Archive | `docs/archived/` (read `rule://registries`), `docs/plans/archived/`, `docs/gaps-archive.md`, architecture source records, and where a project numbered decisions their frozen map `docs/architecture/decisions-archive.md` (gains no rows; a row leaves only with its removed section) | Frozen once archived; never rewrite or repoint historical records |
 {{HANDOFF}}
-The roster at `docs/surfaces/people.md` is Registry class: keep its fixed row schema, never reuse handles, and review changes to people, verified identities and acceptance preferences.
+The roster at `docs/surfaces/people.md` is Registry class: keep its seven-column schema, never reuse handles, and review people, verified identities, roles and preferences. `/mosaic-onboard` may change only roster rows via a reviewed roster PR; personal settings remain outside checkouts. Slack ids are optional notification identities, never acceptance evidence.
 An archived `done` plan whose pull request is still open may receive handoff evidence and repair records under `rule://handoff`; Archive-class freezing applies after landing.
 {{/HANDOFF}}
 ## Record routing

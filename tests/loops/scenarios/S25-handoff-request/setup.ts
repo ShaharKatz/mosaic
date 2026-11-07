@@ -15,10 +15,10 @@ const stamp = "2026-11-03T10:00:00Z";
 const roster = `# People
 Registry: one row per person; handles are never reused. No emails or secrets. Reviewed rows say who may accept which gate.
 
-| Handle | Roles | Tracker id | Tracker mention | GitHub login | Prefers |
-|---|---|---|---|---|---|
-| @dana | designer | dana | @dana | dana-design | surface: tracker-reply |
-| @lior | product | lior | @lior | lior-pm | — |
+| Handle | Roles | Tracker id | Tracker mention | GitHub login | Slack id | Prefers |
+|---|---|---|---|---|---|---|
+| @dana | designer | dana | @dana | dana-design | — | surface: tracker-reply |
+| @lior | product | lior | @lior | lior-pm | — | — |
 `;
 
 export async function setup(scenario: Scenario): Promise<void> {

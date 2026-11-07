@@ -261,9 +261,9 @@ async function exerciseHandoff(input: Record<string, unknown>): Promise<void> {
 	const moduleFiles = ["docs/process/handoff.md", ".omp/rules/handoff.md", ROSTER_PATH,
 		"tools/handoff.ts", "tools/constants/handoff.ts", ".omp/skills/mosaic-onboard/SKILL.md", ".claude/skills/mosaic-onboard/SKILL.md"];
 	const previewPath = "docs/surfaces/preview.md";
-	const roster = `# People\n\n${ROSTER_HEADER}\n|---|---|---|---|---|---|\n`
-		+ "| @dana | designer | user-dana | @Dana | dana-l | surface: pr-review; artifacts: preview, pr |\n"
-		+ "| @quinn | qa | user-quinn | @Quinn | quinn-q | — |\n";
+	const roster = `# People\n\n${ROSTER_HEADER}\n|---|---|---|---|---|---|---|\n`
+		+ "| @dana | designer | user-dana | @Dana | dana-l | U_DANA | surface: pr-review; artifacts: preview, pr |\n"
+		+ "| @quinn | qa | user-quinn | @Quinn | quinn-q | U_QUINN | — |\n";
 	const preview = "# Preview: Branch\n- produce: skill:project-preview\n"
 		+ "## Produce\nRun the project preview skill for the reviewed head.\n"
 		+ "## Served commit\nCompare the version endpoint SHA with the reviewed head.\n"
@@ -279,11 +279,11 @@ async function exerciseHandoff(input: Record<string, unknown>): Promise<void> {
 		members: topology === "multi-repo" ? [{ name: "member", path: "group/member", stack: "project-defined", testCommand: "true", coverageNote: "" }] : [],
 		remotes: { link: "https://example.invalid/root.git", members: { member: "https://example.invalid/member.git" } },
 		...(enabled ? { handoff: {
-			flows: [{ id: "design-acceptance", areas: [`${topology === "multi-repo" ? "group/member/" : ""}surface/**`], gates: [
+			flows: [{ id: "design-acceptance", when: "The change alters the user-facing surface.", areas: [`${topology === "multi-repo" ? "group/member/" : ""}surface/**`], gates: [
 				{ role: "designer", surfaces: mode === "none" ? ["pr-review"] : ["tracker-reply", "pr-review"], artifacts: ["pr", "preview"],
 					...(mode === "mcp" ? { state: "QA" } : {}) },
 				{ role: "qa", surfaces: ["pr-review"] },
-			] }], preview: previewPath, ...(mode === "mcp" ? { requestReview: false } : {}),
+			] }], preview: previewPath, notify: { slack: { server: "slack_team", channel: "C_REVIEW" } }, ...(mode === "mcp" ? { requestReview: false } : {}),
 		} } : {}),
 	});
 	const doctor = (root: string, code: number) => {
@@ -317,6 +317,8 @@ async function exerciseHandoff(input: Record<string, unknown>): Promise<void> {
 		if (enabled) {
 			strictEqual(metadata.handoff.requestReview, mode !== "mcp");
 			deepStrictEqual(metadata.handoff.flows[0].gates[1].artifacts, ["pr"]);
+			deepStrictEqual(metadata.handoff.notify, { slack: { server: "slack_team", channel: "C_REVIEW" } });
+			strictEqual(metadata.handoff.flows[0].when, "The change alters the user-facing surface.");
 			strictEqual(readlinkSync(join(fresh, ".omp/rules/handoff.md")), "../../docs/process/handoff.md");
 		}
 		strictEqual(doctor(fresh, 0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
@@ -384,6 +386,25 @@ async function exerciseHandoff(input: Record<string, unknown>): Promise<void> {
 		putAt(fresh, ROSTER_PATH, roster);
 	}
 	strictEqual(doctor(fresh, 0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+	try {
+		const missingSlack = roster.replace("U_DANA", "—").replace("U_QUINN", "—")
+			+ "| @lee | designer | user-lee | @Lee | lee-d | — | — |\n"
+			+ "| @dev | engineer | — | — | — | — | — |\n";
+		putAt(fresh, ROSTER_PATH, missingSlack);
+		const output = doctor(fresh, 0), warnings = output.split("\n").filter(line => line.startsWith("WARN "));
+		for (const handle of ["@dana", "@quinn", "@lee"]) {
+			ok(warnings.some(line => line.includes(handle) && /slack/i.test(line)), output);
+		}
+		ok(!warnings.some(line => line.includes("@dev")), output);
+		ok(output.endsWith("doctor: 0 fail, 3 warn, 0 cannot-evaluate\n"), output);
+		const unconfigured = structuredClone(metadata);
+		delete unconfigured.handoff.notify;
+		putAt(fresh, ".omp/mosaic.json", JSON.stringify(unconfigured));
+		strictEqual(doctor(fresh, 0), "doctor: 0 fail, 0 warn, 0 cannot-evaluate\n");
+	} finally {
+		putAt(fresh, ".omp/mosaic.json", metadataText);
+		putAt(fresh, ROSTER_PATH, roster);
+	}
 	const constantsPath = "tools/constants/handoff.ts", constants = readFileSync(join(fresh, constantsPath), "utf8");
 	try {
 		putAt(fresh, constantsPath, 'throw new Error("INSPECTED HANDOFF CODE EXECUTED");\n');

@@ -11,8 +11,8 @@
 | [plans/README.md](plans/README.md) | Master ledger for every repo | Reserving a number or locating a plan |
 | [plans/TEMPLATE.md](plans/TEMPLATE.md) | Plan schema | Authoring a plan |
 {{HANDOFF}}
-| [surfaces/people.md](surfaces/people.md) | Roster roles, verified identities and acceptance preferences | Choosing or verifying a plan's acceptor |
-| [handoff tool](../tools/handoff.ts) | Resolve flows/acceptors, check gate status, manage personal defaults | Planning or resuming acceptance; `/mosaic-onboard` |
+| [surfaces/people.md](surfaces/people.md) | Seven-column roster, roles, verified identities, optional Slack notifications and preferences | Onboarding or verifying a plan's acceptor |
+| [handoff tool](../tools/handoff.ts) | Resolve flows/suggestions, check gates, upsert reviewed roster rows and manage personal defaults | Planning or resuming acceptance; `/mosaic-onboard [teammate <name>]` |
 {{/HANDOFF}}
 {{DIAGRAMS_MERMAID}}
 | Diagram contract at `{{DIAGRAMS_ROOT}}/README.md` | Mermaid file/element contract, provenance, transitions | Editing or reviewing topology |

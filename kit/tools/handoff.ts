@@ -1,13 +1,15 @@
 #!/usr/bin/env bun
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { closeSync, fchmodSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import {
 	assertAcceptor, CANNOT_EVALUATE, CLEARED, CONFIG_PATH, executionLog, flowValue, gateStatuses, hasIdentity,
 	linkRemote, matchFlows, NONE, OK, parseRoster, PENDING, planFrontmatter, projectKey, ROSTER_PATH,
-	rosterErrors, userFilePath, validateHandoff, validateUserFile,
+	rosterErrors, upsertRoster, userFilePath, validateHandoff, validateUserFile,
 	type Handoff, type Person, type PlanFrontmatter, type UserFile,
 } from "./constants/handoff.ts";
+import { realpathWithinRoot } from "./root-containment.ts";
 
 class InvalidInput extends Error {}
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -16,11 +18,36 @@ const input = <T>(read: () => T): T => {
 };
 const json = (value: unknown): void => console.log(JSON.stringify(value, null, 2));
 
-function context() {
+function rosterPath(): string {
+	const root = resolve(import.meta.dir, "..");
+	const path = realpathWithinRoot(root, resolve(root, ROSTER_PATH));
+	if (path === null || !statSync(path).isFile()) throw new Error(`roster must resolve to a contained file: ${ROSTER_PATH}`);
+	return path;
+}
+
+function writeRoster(path: string, markdown: string): void {
+	const mode = statSync(path).mode & 0o7777;
+	const temporary = `${path}.${randomUUID()}.tmp`;
+	const fd = openSync(temporary, "wx", 0o600);
+	try {
+		try {
+			writeFileSync(fd, markdown, "utf8");
+			fchmodSync(fd, mode);
+		} finally { closeSync(fd); }
+		renameSync(temporary, path);
+	} finally { rmSync(temporary, { force: true }); }
+}
+
+function configuration() {
 	const config = JSON.parse(readFileSync(resolve(import.meta.dir, "..", CONFIG_PATH), "utf8"));
 	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("runtime metadata must be an object");
 	const handoff = validateHandoff(config.handoff, { landing: config.landing?.mode ?? "direct", tracking: config.tracking?.mode ?? "none" });
-	const people = parseRoster(readFileSync(resolve(import.meta.dir, "..", ROSTER_PATH), "utf8"));
+	return { config, handoff };
+}
+
+function context() {
+	const { config, handoff } = configuration();
+	const people = parseRoster(readFileSync(rosterPath(), "utf8"));
 	const errors = rosterErrors(people, handoff);
 	if (errors.length) throw new Error(errors.join("; "));
 	return { config, handoff, people };
@@ -86,15 +113,16 @@ function resolvePlan(plan: PlanFrontmatter, handoff: Handoff, people: Person[], 
 		}
 		const post = person ? person.prefers.surface ? [person.prefers.surface] : gate.surfaces.filter(surface => hasIdentity(person!, surface)) : [];
 		const include = person?.prefers.artifacts ? gate.artifacts.filter(artifact => artifact === "pr" || person!.prefers.artifacts!.includes(artifact)) : gate.artifacts;
-		const acceptor = person ? { handle: person.handle, trackerId: person.trackerId, mention: person.mention, githubLogin: person.githubLogin } : null;
+		const acceptor = person ? { handle: person.handle, trackerId: person.trackerId, mention: person.mention, githubLogin: person.githubLogin, slackId: person.slackId } : null;
 		return { ...gate, acceptor, acceptorSource, post, include, requestReview: handoff.requestReview && post.includes("pr-review") };
 	});
-	return { flow, source, candidates, gates };
+	const suggestions = handoff.flows.filter(entry => entry.when !== undefined && entry.id !== flow).map(entry => ({ id: entry.id, when: entry.when! }));
+	return { flow, source, candidates, suggestions, gates };
 }
 
 function main(): void {
 	const [command, ...args] = Bun.argv.slice(2);
-	if (!["resolve", "status", "user", "roster"].includes(command ?? "")) throw new InvalidInput("usage: bun tools/handoff.ts resolve|status --plan <path> | user [--write --me @handle] | roster [--role <role>]");
+	if (!["resolve", "status", "user", "roster"].includes(command ?? "")) throw new InvalidInput("usage: bun tools/handoff.ts resolve|status --plan <path> | user [--write --me @handle] | roster [--role <role>] | roster --set --handle @handle [--roles a,b] [--tracker-id <id>] [--mention <mention>] [--github <login>] [--slack <id>] [--prefers <preferences>] [--dry-run]");
 	if (command === "resolve" || command === "status") {
 		const { values } = input(() => parseArgs({ args, strict: true, options: { plan: { type: "string" } } }));
 		if (!values.plan) throw new InvalidInput(`${command} requires --plan <path>`);
@@ -117,9 +145,29 @@ function main(): void {
 			process.exitCode = cleared ? OK : PENDING;
 		}
 	} else if (command === "roster") {
-		const { values } = input(() => parseArgs({ args, strict: true, options: { role: { type: "string" } } }));
-		const { people } = context();
-		json(values.role === undefined ? people : people.filter(person => person.roles.includes(values.role!)));
+		const { values } = input(() => parseArgs({ args, strict: true, options: {
+			role: { type: "string" }, set: { type: "boolean" }, handle: { type: "string" }, roles: { type: "string" },
+			"tracker-id": { type: "string" }, mention: { type: "string" }, github: { type: "string" }, slack: { type: "string" },
+			prefers: { type: "string" }, "dry-run": { type: "boolean" },
+		} }));
+		if (!values.set) {
+			if (Object.keys(values).some(key => key !== "role" && key !== "set")) throw new InvalidInput("roster write options require --set");
+			const { people } = context();
+			json(values.role === undefined ? people : people.filter(person => person.roles.includes(values.role!)));
+			return;
+		}
+		if (values.role !== undefined) throw new InvalidInput("--role cannot be combined with roster --set; use --roles to set roles");
+		if (!values.handle) throw new InvalidInput("roster --set requires --handle @handle");
+		const { handoff } = configuration();
+		const path = rosterPath();
+		const markdown = readFileSync(path, "utf8");
+		const result = input(() => upsertRoster(markdown, {
+			handle: values.handle!, roles: values.roles, trackerId: values["tracker-id"], mention: values.mention,
+			githubLogin: values.github, slackId: values.slack, prefers: values.prefers,
+		}, handoff));
+		const written = result.action !== "unchanged" && !values["dry-run"];
+		if (written) writeRoster(path, result.markdown);
+		json({ path, handle: values.handle, action: result.action, row: result.row, written });
 	} else {
 		const { values } = input(() => parseArgs({ args, strict: true, options: {
 			write: { type: "boolean" }, me: { type: "string" }, flow: { type: "string" }, acceptor: { type: "string", multiple: true },
