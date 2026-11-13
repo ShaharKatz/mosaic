@@ -281,6 +281,43 @@ try {
    strictEqual(d.byId.get("edge-child-parent")!.card, "}o--||");
   }
  });
+ for (const [name, target, unique, card] of [
+  ["optional self many-to-one", "Item", "", "}o--o|"],
+  ["optional cross-model many-to-one", "Parent", "", "}o--o|"],
+  ["optional one-to-one", "Parent", " @unique", "|o--o|"],
+ ] as const) await regression(name, () => {
+  const s = parseSchema(`model Item {\n id String @id\n parentId String?${unique}\n parent ${target}? @relation(fields: [parentId], references: [id])\n}${target === "Item" ? "" : "\nmodel Parent {\n id String @id\n}"}`, "optional.prisma");
+  const text = renderSchema(s, [s], erd), edge = er(text).byId.get("edge-item-parent")!;
+  strictEqual(edge.from, "model-item"); strictEqual(edge.to, `model-${target.toLowerCase()}`);
+  strictEqual(edge.card, card);
+  strictEqual(new Diagram(text).byId.get("edge-item-parent")!.to, edge.to);
+  throws(() => new Diagram(text.replace(card, "}o--??")));
+ });
+ await regression("required many-to-one remains byte-identical", () => {
+  const s = parseSchema("model Item {\n id String @id\n parentId String\n parent Item @relation(fields: [parentId], references: [id])\n}", "required.prisma");
+  strictEqual(renderSchema(s, [s], erd), `%% generated: mosaic-prisma-erd from required.prisma; Schema; do not edit
+erDiagram
+  %% @model-item component: "platform", source: "required.prisma"
+  model-item["Item (Item)"] {
+    String id PK
+    String parentId FK
+  }
+  %% @edge-item-parent component: "platform", source: "required.prisma"
+  model-item }o--|| model-item : "parentId → id"
+`);
+ });
+ await regression("check rejects stale optional relation cardinalities without writes", async () => {
+  const fresh = await installed("optional-stale");
+  put(fresh, "schema/models/owner.prisma", "model Item {\n id String @id\n parentId String?\n parent Item? @relation(fields: [parentId], references: [id])\n}");
+  cli(fresh);
+  const file = `${erd.output}/owner${SUFFIX}`, generated = readFileSync(join(fresh, file), "utf8");
+  put(fresh, file, generated.replace("}o--o|", "}o--||"));
+  const before = snapshot(fresh);
+  ok(cli(fresh, 1, "--check").includes(`erd-check: changed: ${file}`));
+  deepStrictEqual(snapshot(fresh), before);
+  cli(fresh); strictEqual(readFileSync(join(fresh, file), "utf8"), generated);
+  cli(fresh, 0, "--check"); command(fresh, [bun, "tools/diagram-check.ts"], 0);
+ });
  await regression("named map diagnostic", () => {
   for (const text of ['model Item {\n id Int @map(name: "x")\n}', 'model Item {\n id Int\n @@map(name: "x")\n}']) throws(() => parseSchema(text, "mapped.prisma"), /mapped.prisma:\d+: @map\/@@map requires one positional string argument/);
  });

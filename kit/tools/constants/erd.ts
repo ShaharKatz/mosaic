@@ -15,6 +15,7 @@ export const ENUM_ATTRIBUTES: Record<string, true> = { map: true, schema: true }
 // Column markers: PK/FK/UK are Mermaid ER keys; IDX goes into the row comment.
 export const MARKERS = [["id", "PK"], ["relation", "FK"], ["unique", "UK"], ["index", "IDX"]] as const;
 export const MANY_TO_ONE = "}o--||", ONE_TO_ONE = "|o--||", MANY_TO_MANY = "}o--o{";
+export const MANY_TO_OPTIONAL_ONE = "}o--o|", ONE_TO_OPTIONAL_ONE = "|o--o|";
 export const DEPENDENCY_DIRECTORY = "node_modules";
 export function safeGlob(value: unknown): value is string {
   return typeof value === "string" && !!value && !/[\\\s\0{}()]/.test(value) && !value.startsWith("/")
