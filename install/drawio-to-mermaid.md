@@ -21,13 +21,15 @@ Copy the saved manifest to the working input and set `diagrams.mode: "mermaid"`.
 ## 4. Convert
 
 ```sh
-bun <mosaic>/install/drawio-to-mermaid.ts --root <root> [--plans docs/plans]
+bun <mosaic>/install/drawio-to-mermaid.ts --root <root> [--plans docs/plans] [--docs docs]
 ```
 
-- `<root>` covers generated ERDs too: `diagrams.erd.output` always lies inside it. Pass `--plans docs/plans` whenever the project has plans.
+- `<root>` covers generated ERDs too: `diagrams.erd.output` always lies inside it. Pass `--plans docs/plans` whenever the project has plans, and `--docs docs` whenever it has live docs. `--docs` accepts one safe repository-relative directory.
 - Each hand-authored `.drawio` becomes the sibling `.mmd`: ids, labels (`<br/>` line breaks, `#quot;` quotes), layers as classes, `<object>` attributes as data pairs, containers as subgraphs, tables as `table: "true"` nodes, shapes, categories from the old palette, and edge kinds from dash style.
 - Generated ERDs (`mxfile generator="mosaic-prisma-erd"`) are deleted, not converted; step 6 regenerates them.
 - With `--plans`, `.drawio` becomes `.mmd` in `diagram:<path>#<id>` areas and in `## Architecture delta` references and `- diagrams:` lists of plans outside `docs/plans/archived/`. Archived plans, landing receipts and frozen migration records stay as they are.
+- With `--docs`, Markdown links/images (including anchors, encoded paths and angle-bracket destinations containing spaces) and backticked repository-relative paths under that directory are repointed only when their resolved destination was converted or was a deleted generated ERD. Links resolve relative to their Markdown file, or from the repository root when they start with `/`; code spans resolve from the repository root. Path spelling, query, fragment and title are preserved. Generated ERD references become `<stem>.erd.mmd`, ready for step 6. Each changed file is reported. Both rewrites skip directories named `archived`, consecutive `plans/evidence/` directories (even without `--plans`), `<plans>/evidence/`, `docs/architecture/source/`, `gaps-archive.md` and `decisions-archive.md`; unrelated `.drawio` destinations stay unchanged. Documentation directories and scanned files must physically remain inside the repository; frozen exclusions use their canonical repository-relative paths, so symlink aliases cannot bypass them. Unsafe documentation paths abort before any writes. Without `--docs`, live-doc references are not rewritten.
+- Inline destinations support balanced or escaped parentheses, with quoted or parenthesized titles. The configured plans directory is canonicalized too, so a custom plans-directory alias cannot bypass evidence exclusions when `--plans` and `--docs` overlap.
 - `.drawio` sources are deleted after a successful write; `--keep` retains them for inspection, but remove them before landing (doctor fails on `*.drawio` under the root).
 
 Exit codes:

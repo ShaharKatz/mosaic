@@ -2,7 +2,7 @@
 // Source-side converter smoke: old draw.io fixtures (builders from e2b4125 tests/kit/diagram-smoke.ts) in a
 // sandbox installed with the current kit, converted by install/drawio-to-mermaid.ts and checked by the new tools.
 import { deepStrictEqual as eq, ok, strictEqual as equal } from "node:assert";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { deflateRawSync } from "node:zlib";
@@ -161,6 +161,137 @@ try {
     ok(text.includes("Body cites fixture.drawio#api.") && text.includes(`See ${root}/fixture.drawio#api.`), text);
     equal(read("docs/plans/archived/0000-old.md"), plan(""));
     equal(read("docs/plans/0002-crlf.md"), crlf(".mmd"));
+  });
+  test("live_docs_repoint_only_migrated_destinations", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    const erd = diagram(); erd.attrs.generator = "mosaic-prisma-erd";
+    save(erd, `${root}/erd/schema.erd.drawio`);
+    put("docs/archived/fixture.drawio", serialize(d));
+    const doc = "docs/architecture/nested/overview.md";
+    const before = [
+      "[system](../diagrams/fixture.drawio)",
+      "![detail](../diagrams/./fixture.drawio#api)",
+      `Repo path: \`${fixture}\`.`,
+      "[schema](../diagrams/erd/schema.erd.drawio)",
+      "[history](../../archived/fixture.drawio)",
+      "[unconverted](../diagrams/absent.drawio)",
+      "[remote](https://example.invalid/diagrams/fixture.drawio)",
+    ].join("\n");
+    const after = before.replace("../diagrams/fixture.drawio)", "../diagrams/fixture.mmd)")
+      .replace("../diagrams/./fixture.drawio#api", "../diagrams/./fixture.mmd#api")
+      .replace(`\`${fixture}\``, `\`${output}\``)
+      .replace("schema.erd.drawio)", "schema.erd.mmd)");
+    put(doc, before);
+    const frozen = [
+      "docs/architecture/nested/archived/overview.md",
+      "docs/plans/evidence/overview.md",
+      "docs/architecture/source/overview.md",
+      "docs/architecture/gaps-archive.md",
+      "docs/architecture/decisions-archive.md",
+    ];
+    for (const file of frozen) put(file, `Frozen: \`${fixture}\`.`);
+    const { out } = run(["--root", root, "--plans", "docs/plans", "--docs", "docs"], 0);
+    equal(read(doc), after);
+    ok(out.includes(`rewrote doc references: ${doc}`), out);
+    for (const file of frozen) equal(read(file), `Frozen: \`${fixture}\`.`);
+    equal(read("docs/archived/fixture.drawio"), serialize(d));
+  });
+  test("evidence_frozen_without_plans_option", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    const text = `Evidence: \`${fixture}\`.`;
+    put("docs/plans/evidence/0001/x.md", text);
+    run(["--root", root, "--docs", "docs"], 0);
+    equal(read("docs/plans/evidence/0001/x.md"), text);
+  });
+  test("external_docs_alias_rejected_without_writes", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    const external = join(scratch, "outside-docs"), text = `Outside: \`${fixture}\`.`;
+    put(join(external, "overview.md"), text);
+    symlinkSync(external, "docs-alias");
+    run(["--root", root, "--docs", "docs-alias"], 1);
+    equal(readFileSync(join(external, "overview.md"), "utf8"), text);
+    ok(exists(fixture) && !exists(output));
+  });
+  test("internal_docs_alias_keeps_frozen_source", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    const text = `Frozen: \`${fixture}\`.`;
+    put("docs/architecture/source/overview.md", text);
+    symlinkSync("docs/architecture/source", "history-alias");
+    run(["--root", root, "--docs", "history-alias"], 0);
+    equal(read("docs/architecture/source/overview.md"), text);
+  });
+  test("aliased_root_repoints_physical_links", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    put("docs/architecture/overview.md", "[system](diagrams/fixture.drawio#api)");
+    symlinkSync(root, "diagrams-alias");
+    run(["--root", "diagrams-alias", "--docs", "docs"], 0);
+    equal(read("docs/architecture/overview.md"), "[system](diagrams/fixture.mmd#api)");
+    ok(exists(output) && !exists(fixture));
+  });
+  test("root_relative_destination", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    put("docs/architecture/overview.md", `[system](/${fixture}?q=1#api "System title")`);
+    run(["--root", root, "--docs", "docs"], 0);
+    equal(read("docs/architecture/overview.md"), `[system](/${output}?q=1#api "System title")`);
+  });
+  test("encoded_destination_suffix", () => {
+    const erd = diagram(); erd.attrs.generator = "mosaic-prisma-erd";
+    save(erd, `${root}/schema.erd.drawio`);
+    put("docs/architecture/overview.md", '[encoded](diagrams/schema.erd%2Edrawio?q=1#model "Schema title")');
+    run(["--root", root, "--docs", "docs"], 0);
+    equal(read("docs/architecture/overview.md"), '[encoded](diagrams/schema.erd%2Emmd?q=1#model "Schema title")');
+  });
+  test("angle_destination_with_spaces", () => {
+    const erd = diagram(); erd.attrs.generator = "mosaic-prisma-erd";
+    save(erd, `${root}/schema space.erd.drawio`);
+    put("docs/architecture/overview.md", '[spaced](<diagrams/schema space.erd.drawio?q=1#model> "Schema title")');
+    run(["--root", root, "--docs", "docs"], 0);
+    equal(read("docs/architecture/overview.md"), '[spaced](<diagrams/schema space.erd.mmd?q=1#model> "Schema title")');
+  });
+  test("custom_plans_alias_keeps_evidence_frozen", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    const text = `Evidence: \`${fixture}\`.`;
+    put("docs/planning/evidence/review.md", text);
+    symlinkSync("docs/planning", "planning-alias");
+    run(["--root", root, "--docs", "planning-alias", "--plans", "planning-alias"], 0);
+    equal(read("docs/planning/evidence/review.md"), text);
+  });
+  test("parenthesized_link_title", () => {
+    const erd = diagram(); erd.attrs.generator = "mosaic-prisma-erd";
+    save(erd, `${root}/schema.erd.drawio`);
+    put("docs/architecture/overview.md", "[title](diagrams/schema.erd.drawio (Title))");
+    run(["--root", root, "--docs", "docs"], 0);
+    equal(read("docs/architecture/overview.md"), "[title](diagrams/schema.erd.mmd (Title))");
+  });
+  test("balanced_parentheses_destination", () => {
+    const erd = diagram(); erd.attrs.generator = "mosaic-prisma-erd";
+    save(erd, `${root}/schema(v2).erd.drawio`);
+    const before = [
+      "[balanced](diagrams/schema(v2).erd.drawio)",
+      "[escaped](diagrams/schema\\(v2\\).erd.drawio#model 'Schema title')",
+      "[title](diagrams/schema(v2).erd.drawio (Title \\(v2\\)))",
+      "[reference]: diagrams/schema(v2).erd.drawio",
+      "[next-line]:\n  diagrams/schema(v2).erd.drawio",
+      "[malformed](diagrams/schema(v2).erd.drawio (unterminated)",
+    ];
+    put("docs/architecture/overview.md", before.join("\n"));
+    run(["--root", root, "--docs", "docs"], 0);
+    equal(read("docs/architecture/overview.md"), before.map((line, index) => index < 5 ? line.replace(".drawio", ".mmd") : line).join("\n"));
+  });
+  test("docs_unchanged_without_option", () => {
+    const d = diagram(); element(d, "api"); save(d);
+    const text = `[system](diagrams/fixture.drawio#api)\n\`${fixture}\`\n`;
+    put("docs/architecture/overview.md", text);
+    run(["--root", root], 0);
+    equal(read("docs/architecture/overview.md"), text);
+  });
+  test("docs_unchanged_on_exit_1", () => {
+    const d = diagram(); element(d, "end"); save(d);
+    const text = `[system](diagrams/fixture.drawio)\n\`${fixture}\`\n`;
+    put("docs/architecture/overview.md", text);
+    run(["--root", root, "--docs", "docs/architecture"], 1);
+    equal(read("docs/architecture/overview.md"), text);
+    ok(exists(fixture) && !exists(output));
   });
   test("findings_exit_2", () => {
     const d = diagram(); element(d, "api", "as-built", { metadata: { source: "missing/file.ts" } }); save(d);
