@@ -210,6 +210,10 @@ function testingFor(manifest: Manifest): TestEntry[] | undefined {
       testRunner: entry.testRunner ? validateRunner(entry.testRunner, manifest.topology === "multi-repo" ? "." : entry.path.replace(/\/+$/, ""))
         : { format: "exit-code", setup: [], argsPrefix: [], cwd: manifest.topology === "multi-repo" ? "." : entry.path.replace(/\/+$/, "") },
     })),
+  ], [
+    ...(manifest.rootTest ? ["rootTest.testCommand"] : []),
+    ...(manifest.topology === "multi-repo" ? manifest.members : manifest.components).map((_entry, index) =>
+      `${manifest.topology === "multi-repo" ? "members" : "components"}[${index}].testCommand`),
   ]);
 }
 function commandCwd(member: Member, manifest: Manifest): string {
