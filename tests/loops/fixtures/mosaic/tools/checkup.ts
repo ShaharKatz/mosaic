@@ -222,9 +222,11 @@ function planCitations(file: string, line: string, index: number): string[] {
 	return ids;
 }
 for (const [file, lines] of markdown) {
-	if (frozen(file)) continue;
+	// Evidence snapshots retain historical citations; their links are still checked below.
+	if (frozen(file) || /(?:^|\/)docs\/plans\/evidence\//.test(file)) continue;
 	for (const [index, line] of lines.entries()) {
-		for (const id of new Set([...(line.match(/\b(?:D\d+|G-\d+|P-\d+)\b/g) ?? []), ...planCitations(file, line, index)])) {
+		// Repository-qualified decisions belong to another repository, not this namespace.
+		for (const id of new Set([...(line.match(/\b(?:(?<![A-Za-z0-9][A-Za-z0-9._-]*:)D\d+|G-\d+|P-\d+)\b/g) ?? []), ...planCitations(file, line, index)])) {
 			if (id.startsWith("D") && !/(?:^|\/)docs\/(?:architecture\/|plans\/|gaps[^/]*\.md$|product\/|process\/)/.test(file)) continue;
 			const prefix = id.startsWith("D") ? "D" : id.startsWith("G-") ? "G-" : id.startsWith("P-") ? "P-" : "0";
 			const known = definitions.get(prefix);

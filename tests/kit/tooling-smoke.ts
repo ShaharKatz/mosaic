@@ -1859,6 +1859,74 @@ try {
 	rmSync(join(target, "archive-impact.md"));
 	console.log("PASS cutoff history: frozen sources excluded, inbound links valid, identical active prose still checked");
 
+	{
+		const decisionIndex = readFileSync(join(target, "docs/architecture/README.md"), "utf8");
+		const citationDoc = "docs/architecture/citation-scope.md";
+		const citationHeader = "---\naffinity: [link-repo]\n---\n# Citation scope\n\n### D1 — Default\n";
+		const citationPlan = "decision-impact.md";
+		const planHeader = "---\nplan: \"0001\"\nrepo: link-repo\nareas: []\n---\n# Decision impact\n";
+		put("docs/architecture/README.md", `${decisionIndex}\n| D1 | Default | citation-scope.md |\n`);
+		for (const [citation, missing] of [
+			["mb-platform:D69", []],
+			["a.b_c-d:D1 a.b_c-d:D69 7:D70 repo-:D71 repo.:D72 repo_:D73", []],
+			["D69", ["D69"]],
+			["(D69", ["D69"]],
+			["under D69 clause 7", ["D69"]],
+			["mb-platform: D69", ["D69"]],
+			[":D69 _:D70 -:D71 .:D72", ["D69", "D70", "D71", "D72"]],
+			["mb-platform:D69 and D69", ["D69"]],
+		] as const) {
+			put(citationDoc, `${citationHeader}\n${citation}\n`);
+			const references = JSON.parse(run([bun, "tools/checkup.ts", "--gate", "--json"], missing.length ? 1 : 0));
+			deepStrictEqual(references.cannotEvaluate, [], citation);
+			deepStrictEqual(references.findings.map((finding: { class: string; path: string; detail: string }) =>
+				[finding.class, finding.path, finding.detail.split(" ")[0]]),
+				missing.map(id => ["dangling-reference", citationDoc, id]), citation);
+			put(citationPlan, `${planHeader}\n${citation}\n`);
+			const impact = JSON.parse(run([bun, "tools/docimpact.ts", citationPlan], 0));
+			deepStrictEqual(impact.cannotEvaluate, missing.map(id => ({
+				class: "decision", reason: `No architecture decision heading found for ${id} cited by ${citationPlan}`,
+			})), citation);
+			ok(impact.candidates.every((candidate: { class: string }) => candidate.class !== "decision"), citation);
+		}
+		put(citationDoc, citationHeader);
+		put(citationPlan, `${planHeader}\nD1\n`);
+		const localImpact = JSON.parse(run([bun, "tools/docimpact.ts", citationPlan], 0));
+		deepStrictEqual(localImpact.cannotEvaluate, []);
+		deepStrictEqual(localImpact.candidates.filter((candidate: { class: string }) => candidate.class === "decision")
+			.map((candidate: { doc: string }) => candidate.doc), [citationDoc]);
+		console.log("PASS decision citations: qualified repositories ignored by checkup and docimpact; bare, punctuated, spaced and mixed citations remain local");
+
+		put(citationDoc, `${citationHeader}\nmb-platform:G-999 mb-platform:P-999 mb-platform:plan 0777\n`);
+		const otherNamespaces = JSON.parse(run([bun, "tools/checkup.ts", "--gate", "--json"], 1));
+		deepStrictEqual(otherNamespaces.cannotEvaluate, []);
+		deepStrictEqual(otherNamespaces.findings.map((finding: { class: string; path: string; detail: string }) =>
+			[finding.class, finding.path, finding.detail.split(" ")[0]]), [
+			["dangling-reference", citationDoc, "0777"],
+			["dangling-reference", citationDoc, "G-999"],
+			["dangling-reference", citationDoc, "P-999"],
+		]);
+		console.log("PASS decision qualification leaves G/P and plan-number citation checks unchanged");
+
+		put(citationDoc, citationHeader);
+		const evidence = "docs/plans/evidence/0001/packet.md";
+		const historicalCitations = "D7 G-997 P-997 and plan 0777 were quoted in this packet.\n";
+		put(evidence, historicalCitations);
+		deepStrictEqual(JSON.parse(run([bun, "tools/checkup.ts", "--gate", "--json"], 0)), { findings: [], cannotEvaluate: [] });
+		put("docs/plans/archived/0999-evidence.md", "# Archived evidence probe\n");
+		put(evidence, `${historicalCitations}\n[Archived plan](../../0999-evidence.md)\n[Missing source](missing.md)\n`);
+		const evidenceLinks = JSON.parse(run([bun, "tools/checkup.ts", "--gate", "--json"], 1));
+		deepStrictEqual(evidenceLinks.cannotEvaluate, []);
+		const packetFindings = evidenceLinks.findings.filter((finding: { path: string }) => finding.path === evidence);
+		deepStrictEqual(packetFindings.map((finding: { class: string }) => finding.class), ["doctor", "stale-plan-link"]);
+		console.log("PASS plan evidence: historical citations skipped; missing links and stale plan links still checked");
+		rmSync(join(target, "docs/plans/archived/0999-evidence.md"));
+		rmSync(join(target, "docs/plans/evidence/0001"), { recursive: true });
+		rmSync(join(target, citationDoc));
+		rmSync(join(target, citationPlan));
+		put("docs/architecture/README.md", decisionIndex);
+	}
+
 	put("docs/product/labels.md", "D9 is a project-local label.\n");
 	put("apps/docs/component.md", "D8 is a component-local label.\n");
 	put("packages/docs/component.md", "D7 is a component-local label.\n");
