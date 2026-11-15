@@ -21,6 +21,8 @@ This file is read at the point of use: every skill step that mutates a governed 
 | Genuinely undecided question | Open question | [open-questions.md](../architecture/open-questions.md); promotion to G-x requires a cited human ruling |
 | Product flow, feature, raw ideation | Product | [product/](../product/README.md); feature docs use its F-number and milestone conventions |
 | No lasting duty, trap, ruling, question, or product information | No retained record | State the reason in the owning plan's Execution log or light-path commit |
+
+For a decision recorded in another repository, use `<repository>:D<n>` (for example `mb-platform:D69`), where `<repository>` matches `[A-Za-z0-9][A-Za-z0-9._-]*` and the colon has no surrounding spaces.
 ## Minting gate
 Every candidate tagged record — obligation, pitfall, or a change to a legacy decision — passes one gate, written out with the candidate (its disposition line and the closure packet) and re-derived by its reviewers:
 1. **Route:** fires on a future condition? → Obligation; a way to get it wrong? → Pitfall; a fact nobody adapts to? → prose; otherwise Open question, Product, or no retained record with a reason. Defects are repair work, not future obligations. A painful moment with no lesson is a log line, not a record.
