@@ -70,8 +70,8 @@ if (!areas) {
 }
 const contracts = areas?.filter(area => area.startsWith("contract:")).map(area => area.slice("contract:".length)).filter(Boolean) ?? [];
 const symbols = contracts.map(contract => ({ name: contract, pattern: token(contract) }));
-// Repository-qualified decisions belong to another repository, not this plan's local decision set.
-const decisions = new Set(plan.match(/(?<![A-Za-z0-9][A-Za-z0-9._-]*:)\bD\d+\b/g) ?? []);
+// Only a complete repository token may qualify a foreign decision.
+const decisions = new Set(plan.match(/(?<!(?<![A-Za-z0-9._-])[A-Za-z0-9][A-Za-z0-9._-]*:)\bD\d+\b/g) ?? []);
 const foundDecisions = new Set<string>();
 
 const docs = new Map<string, string>();

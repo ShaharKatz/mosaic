@@ -1868,11 +1868,15 @@ try {
 		put("docs/architecture/README.md", `${decisionIndex}\n| D1 | Default | citation-scope.md |\n`);
 		for (const [citation, missing] of [
 			["mb-platform:D69", []],
+			["a.b_c-d:D42", []],
 			["a.b_c-d:D1 a.b_c-d:D69 7:D70 repo-:D71 repo.:D72 repo_:D73", []],
 			["D69", ["D69"]],
 			["(D69", ["D69"]],
 			["under D69 clause 7", ["D69"]],
 			["mb-platform: D69", ["D69"]],
+			["-mb:D69", ["D69"]],
+			["_x:D70", ["D70"]],
+			[".a:D2", ["D2"]],
 			[":D69 _:D70 -:D71 .:D72", ["D69", "D70", "D71", "D72"]],
 			["mb-platform:D69 and D69", ["D69"]],
 		] as const) {
@@ -1895,7 +1899,7 @@ try {
 		deepStrictEqual(localImpact.cannotEvaluate, []);
 		deepStrictEqual(localImpact.candidates.filter((candidate: { class: string }) => candidate.class === "decision")
 			.map((candidate: { doc: string }) => candidate.doc), [citationDoc]);
-		console.log("PASS decision citations: qualified repositories ignored by checkup and docimpact; bare, punctuated, spaced and mixed citations remain local");
+		console.log("PASS decision citations: qualified repositories ignored by checkup and docimpact; bare, punctuated, spaced, malformed-name and mixed citations remain local");
 
 		put(citationDoc, `${citationHeader}\nmb-platform:G-999 mb-platform:P-999 mb-platform:plan 0777\n`);
 		const otherNamespaces = JSON.parse(run([bun, "tools/checkup.ts", "--gate", "--json"], 1));
